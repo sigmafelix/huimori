@@ -2,11 +2,11 @@ list_basefiles <-
   list(
     targets::tar_target(
       name = chr_monitors_file,
-      command = file.path("/mnt/s", "Korea")
+      command = file.path(chr_dir_git, "data/sites", "sites_history_cleaning_20250311.xlsx")
     ),
     targets::tar_target(
       name = chr_measurement_file,
-      command = file.path("/mnt/s/", "Korea", "airquality", "outdoor", "korea_2010_2023_yd.parquet")
+      command = file.path("/mnt/s/", "Korea", "airquality", "outdoor", "sites_airkorea_2010_2023_spt_yd.parquet")
     ),
     targets::tar_target(
       name = chr_landuse_file,
@@ -32,9 +32,10 @@ list_basefiles <-
     ),
     targets::tar_target(
       name = chr_asos_file,
-      command = file.path(chr_dir_data, "weather", "asos", "asos_2010_2023.parquet")
+      command = file.path(chr_dir_data, "weather", "data", "asos_2010_2023.parquet")
     ),
     targets::tar_target(
-        
+      name = chr_asos_site_file,
+      command = file.path(chr_dir_data, "weather", "data", "asos_sites.xlsx")
     )
   )

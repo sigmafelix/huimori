@@ -2,16 +2,225 @@
 list_process_site <-
   list(
     targets::tar_target(
+      name = dt_measurements,
+      command = nanoparquet::read_parquet(chr_measurement_file)
+    ),
+    targets::tar_target(
+      name = sf_monitors_base,
+      command = {
+        sites <- readxl::read_excel(
+          chr_monitors_file
+        )
+
+        # another approach: sites_c
+        sites_c <- sites |>
+          dplyr::filter(!grepl("(광화학|중금속|산성|유해)", site_type)) |>
+          dplyr::arrange(TMSID, site_type, year) |>
+          dplyr::filter(!grepl("\\-[1-9]$", TMSID)) |>
+          dplyr::ungroup() |>
+          # pre-cleaning: detect max year
+          dplyr::group_by(TMSID, site_type) |>
+          dplyr::mutate(year_max = max(year)) |>
+          dplyr::ungroup() |>
+          # distict rows by selected fields
+          # .keep_all will keep the first row in each group
+          dplyr::distinct(
+            TMSID, date_start, date_end, coords_google, floor,
+            .keep_all = TRUE
+          ) |>
+          dplyr::mutate(
+            date_start = as.POSIXct(date_start, tz = "Asia/Seoul"),
+            date_end = as.POSIXct(date_end, tz = "Asia/Seoul")
+          ) |>
+          dplyr::group_by(TMSID) |>
+          # Assign first and last row
+          dplyr::mutate(
+            date_start =
+            replace(date_start, dplyr::row_number() == 1, unique(fill_date(date_start, min(year), TRUE))),
+            date_end =
+            replace(date_end, dplyr::row_number() == dplyr::n(), unique(fill_date(date_end, max(year_max), start = FALSE)))
+          ) |>
+          # if no location changes were detected and date_start and date_end are NAs,
+          # use the minimum year to assign date_start and
+          # the maximum year to assign date_end, respectively.
+          dplyr::mutate(
+            date_start = ifelse(dplyr::n() == 1 & is.na(date_start), as.POSIXct(sprintf("%d0101010000", year), format = "%Y%m%d%H%M%S", tz = "Asia/Seoul"), date_start),
+            date_end = ifelse(dplyr::n() == 1 & is.na(date_end), as.POSIXct(sprintf("%d1231230000", year_max), format = "%Y%m%d%H%M%S", tz = "Asia/Seoul"), date_end)
+          ) |>
+          dplyr::filter(!(is.na(date_start) & is.na(date_end))) |>
+          dplyr::mutate(
+            #date_start = ifelse(is.na(date_start), dplyr::lead(date_end), date_start)#,
+            date_end = ifelse(is.na(date_end), dplyr::lead(date_end), date_end)
+          ) |>
+          dplyr::ungroup() |>
+          dplyr::filter(!is.na(date_start)) |>
+          dplyr::mutate(
+            date_start = as.POSIXct(date_start, tz = "Asia/Seoul"),
+            date_end = as.POSIXct(date_end, tz = "Asia/Seoul")
+          )
+
+        check_lookup <-
+          c("[도시대기측정망]", "[도로변대기측정망]", "[PM2.5성분측정망]", "[교외대기측정망]",
+            "[항만측정망]", "[국가배경농도(도서)측정망]", "[대기오염집중측정망]")
+        target_lookup <-
+          c("Urban", "Roadside", "PM2.5", "Suburban",
+            "Port", "Island", "Concentrated")
+
+        # Grand lookup table for temporal join
+        sites_ch <- sites_c |>
+          dplyr::select(TMSID, site_type, dplyr::starts_with("date_"), dplyr::starts_with("coords_google")) |>
+          dplyr::distinct() |>
+          dplyr::rowwise() |>
+          dplyr::mutate(
+            lon = as.numeric(stringi::stri_split_fixed(coords_google, pattern = ", ")[[1]][2]),
+            lat = as.numeric(stringi::stri_split_fixed(coords_google, pattern = ", ")[[1]][1])
+          ) |>
+          dplyr::ungroup() |>
+          dplyr::mutate(
+            site_type = sub(" ", "", site_type),
+            site_type = plyr::mapvalues(site_type, check_lookup, target_lookup),
+            site_type = factor(site_type, levels = target_lookup[c(1, 2, 4, 5, 3, 6, 7)])
+          ) |>
+          dplyr::group_by(TMSID) |>
+          dplyr::mutate(TMSID2 = paste0(TMSID, LETTERS[seq_len(length(TMSID))])) |>
+          dplyr::ungroup()
+
+        sites_ch
+      }
+    ),
+    targets::tar_target(
       name = sf_monitors_correct,
-      command = sf::st_as_sf(chr_monitors_file)
+      command = {
+
+        ak_sites_annual <- huimori::summarize_annual(
+          data = dt_measurements,
+          timeflag = "date"
+        )
+
+        # relocation distance
+        sites_cfd <-
+          sf_monitors_base |>
+          dplyr::arrange(TMSID, date_start) |>
+          dplyr::group_by(TMSID) |>
+          dplyr::mutate(lon2 = lag(lon), lat2 = lag(lat)) |>
+          dplyr::rowwise() |>
+          # dplyr::ungroup() |>
+          # dplyr::group_by(TMSID) |>
+          dplyr::mutate(dist_m = geosphere::distGeo(c(lon, lat), c(lon2, lat2))) |>
+          dplyr::ungroup()
+
+
+        # Unique space-time by years
+        sites_fullrange <- sites_cfd %>%
+          dplyr::group_by(TMSID, TMSID2) %>%
+          dplyr::filter(!is.na(date_start) & !is.na(date_end)) %>%
+          tidyr::nest() %>%
+          dplyr::mutate(
+            year_all = purrr::map(data, function(df) {
+              # compute year_start, year_end from df
+              ystart <- lubridate::year(df$date_start)
+              yend   <- lubridate::year(df$date_end)
+              data.frame(year = seq(ystart, yend))
+            })
+          ) %>%
+          tidyr::unnest(c(year_all, data)) %>%
+          dplyr::ungroup()
+
+        ##   weight by lengths of each location for annual mean
+        sites_sf <-
+          sites_fullrange |>
+          dplyr::filter(!is.na(lon)) |>
+          st_as_sf(
+            coords = c("lon", "lat"),
+            crs = 4326
+          ) |>
+          st_transform(5179) |>
+          dplyr::full_join(
+            ak_sites_annual,
+            by = c("TMSID", "TMSID2", "year")
+          )
+        sites_sf
+
+      }
     ),
     targets::tar_target(
       name = sf_monitors_incorrect,
-      command = sf::st_as_sf(chr_monitors_incorrect_file)
-    ),
-    targets::tar_target(
-      name = dt_measurements,
-      command = nanoparquet::read_parquet(chr_file_measurements)
+      command = {
+
+        path <- file.path(
+          chr_dir_git, "data/sites",
+          "station_original_cleaned_20250221.rds"
+        )
+        sites_orig <- readRDS(path)
+        sites_orig_lean <-
+          sites_orig |>
+          dplyr::filter(grepl("(도시|종합|도로|교외|항만|배경|도서)", site_type)) |>
+          dplyr::select(
+            TMSID, year, date_start, date_end, site_type,
+            longitude, latitude, longitude_common, latitude_common
+          )
+
+        ak_sites_annual <- huimori::summarize_annual(
+          data = dt_measurements,
+          timeflag = "date"
+        )
+
+
+        sites_orig_lean2 <- sites_orig_lean |>
+          dplyr::mutate(
+            longitude = ifelse(longitude == "", NA, longitude),
+            latitude = ifelse(latitude == "", NA, latitude)
+          ) |>
+          # collapse::na_locf(set = TRUE) |>
+          dplyr::transmute(
+            TMSID = TMSID,
+            year = year,
+            lono = as.numeric(longitude),
+            lato = as.numeric(latitude)
+          ) |>
+          dplyr::group_by(TMSID) |>
+          dplyr::mutate(
+            lono = ifelse(is.na(lono), lono[which(!is.na(lono))][1], lono),
+            lato = ifelse(is.na(lato), lato[which(!is.na(lato))][1], lato)
+          ) |>
+          dplyr::ungroup()
+
+        # as-is
+        sites_asis <-
+          sf_monitors_base |>
+          rectify_year(fieldname = "date_start") |>
+          # dplyr::filter(
+          #   year_rect <= 2020
+          # ) |>
+          dplyr::group_by(TMSID) |>
+          tidyr::nest() |>
+          dplyr::mutate(data = purrr::map(data, function(df) df[nrow(df), ])) |>
+          tidyr::unnest(data) |>
+          dplyr::ungroup() |>
+          dplyr::inner_join(y = sites_orig_lean2, by = "TMSID") |>
+          dplyr::rowwise() |>
+          dplyr::mutate(
+            dist_m =
+            geosphere::distGeo(c(lon, lat), c(lono, lato))
+          ) |>
+          dplyr::ungroup()
+
+        # as-is
+        sites_asis_sf <-
+          sites_asis |>
+          dplyr::filter(!is.na(lono) & !is.na(lato)) |>
+          st_as_sf(
+            coords = c("lono", "lato"),
+            crs = 4326
+          ) |>
+          st_transform(5179) |>
+          dplyr::left_join(
+            ak_sites_annual,
+            by = c("TMSID", "TMSID2", "year")
+          )
+
+        sites_asis_sf
+      }
     ),
     targets::tar_target(
       name = dt_asos,
@@ -67,10 +276,14 @@ list_process_feature <-
   list(
     targets::tar_target(
       name = df_feat_correct_d_road,
-      command = sf::st_nearest_feature(
-        x = sf_monitors_correct,
-        y = sf::st_read(chr_road_files, quiet = TRUE)
-      )
+      command = {
+        road <- sf::st_read(chr_road_files[[11]], quiet = TRUE)
+        road <- sf::st_transform(road, sf::st_crs(sf_monitors_correct))
+        sf::st_nearest_feature(
+          x = sf_monitors_correct,
+          y = road
+        )
+      }
     ),
     targets::tar_target(
       name = df_feat_correct_dsm,

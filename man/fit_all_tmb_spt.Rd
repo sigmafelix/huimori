@@ -5,13 +5,13 @@
 \title{Fit Spatial-Temporal Models and Predict Relocation Impact}
 \usage{
 fit_all_tmb_spt(
-  sf_correct = sites_sf,
-  sf_original = sites_asis_sf,
+  sf_correct = NULL,
+  sf_original = NULL,
   formula = PM10 ~ 1,
   time = "year",
   year_target = 2020,
   resolution = 1000,
-  reference = kor_all,
+  reference = NULL,
   likelihood = gaussian(),
   anisotropy = TRUE,
   log_transform = FALSE

@@ -39,4 +39,3 @@ rasterize_freq <-
     names(rcountedw) <- sprintf("class_%02d", vec_cl)
     return(rcountedw)
   }
-

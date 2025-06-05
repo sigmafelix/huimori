@@ -21,7 +21,8 @@ targets::tar_option_set(
   packages =
     c("targets", "terra", "sf", "dplyr", "collapse",
       "data.table", "tibble", "tune", "yardstick", "workflows",
-      "chopin", "mirai", "parsnip", "finetune", "huimori", "nanoparquet"),
+      "chopin", "mirai", "parsnip", "finetune", "huimori", "nanoparquet",
+      "readxl"),
   format = "qs", # Optionally set the default storage format. qs is fast.
   controller = crew::crew_controller_group(
     controller_01,
