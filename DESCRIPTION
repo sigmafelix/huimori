@@ -1,13 +1,24 @@
 Package: huimori
 Title: Hybrid Urban-rural Integrated Modeling with Open Reproducible Infrastructure in Korea
-Version: 0.0.0.9000
+Version: 0.0.1.9000
 Authors@R: 
     person("Insang", "Song", , "geoissong@snu.ac.kr", role = c("aut", "cre"))
 Description: Reproducible pipeline for hybrid urban-rural integrated modeling in Korea.
     The package provides functions to download, process, and visualize data
     related to urban and rural areas and the main pipeline is based on targets.
 Imports:
-    terra
+    terra,
+    INLA,
+    sf,
+    dplyr,
+    sdmTMB,
+    TMB,
+    tidyterra,
+    terra,
+    tsibble,
+    fable,
+    fabletools,
+    rlang
 License: MIT
 Encoding: UTF-8
 Roxygen: list(markdown = TRUE)

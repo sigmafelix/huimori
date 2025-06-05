@@ -21,7 +21,7 @@ list_basefiles <-
       command = file.path(chr_dir_data, "elevation", "copernicus_korea_30m.tif")
     ),
     targets::tar_target(
-      name = chr_road_dir,
+      name = chr_road_files,
       command =
         list.files(
           file.path(chr_dir_data, "transportation", "nodelink", "data"),
@@ -29,5 +29,12 @@ list_basefiles <-
           recursive = TRUE,
           full.names = TRUE
         )
+    ),
+    targets::tar_target(
+      name = chr_asos_file,
+      command = file.path(chr_dir_data, "weather", "asos", "asos_2010_2023.parquet")
+    ),
+    targets::tar_target(
+        
     )
   )
