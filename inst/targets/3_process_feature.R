@@ -232,7 +232,7 @@ list_process_site <-
 list_process_split <-
   list(
     targets::tar_target(
-      name = int_grid_radii,
+      name = int_grid_size,
       command = c(50, 100, 250, 500),
       iteration = "list"
     ),
@@ -242,32 +242,32 @@ list_process_split <-
       iteration = "list"
     ),
     targets::tar_target(
-      name = sf_grid_radii,
+      name = sf_grid_size,
       command = sf::st_make_grid(
         sf_monitors_correct,
-        cellsize = int_grid_radii,
+        cellsize = int_grid_size,
         what = "centers"
       ),
       iteration = "list",
-      pattern = map(int_grid_radii)
+      pattern = map(int_grid_size)
     ),
     targets::tar_target(
       name = sf_grid_correct_split,
       command = chopin::par_pad_grid(
-        input = sf_grid_radii,
+        input = sf_grid_size,
         mode = "grid",
         nx = int_size_split,
         ny = int_size_split,
         padding = 10
       )$original,
       iteration = "list",
-      pattern = map(sf_grid_radii, int_size_split)
+      pattern = map(sf_grid_size, int_size_split)
     ),
     targets::tar_target(
       name = sf_grid_correct_set,
-      command = sf_grid_radii[sf_grid_correct_split, ],
+      command = sf_grid_size[sf_grid_correct_split, ],
       iteration = "list",
-      pattern = cross(sf_grid_radii, sf_grid_correct_split)
+      pattern = cross(sf_grid_size, sf_grid_correct_split)
     )
   )
 
@@ -280,10 +280,23 @@ list_process_feature <-
       command = {
         road <- sf::st_read(chr_road_files[[11]], quiet = TRUE)
         road <- sf::st_transform(road, sf::st_crs(sf_monitors_correct))
-        sf::st_nearest_feature(
+        nearest_idx <- sf::st_nearest_feature(
           x = sf_monitors_correct,
           y = road
         )
+        road_nearest <- road[nearest_idx, ]
+        dist_road_nearest <-
+          sf::st_distance(
+            x = sf_monitors_correct,
+            y = road_nearest,
+            by_element = TRUE
+          )
+        sf_monitors_dist_att <-
+          sf_monitors_correct |>
+          dplyr::mutate(
+            d_road = dist_road_nearest
+          )
+        sf_monitors_dist_att
       }
     ),
     targets::tar_target(
@@ -334,28 +347,56 @@ list_process_feature <-
     ),
     targets::tar_target(
       name = df_feat_grid_d_road,
-      command = sf::st_nearest_feature(
-        x = sf_monitors_correct,
-        y = sf::st_read(chr_road_files, quiet = TRUE)
-      )
+      command = {
+        road <- sf::st_read(chr_road_files[[11]], quiet = TRUE)
+        road <- sf::st_transform(road, sf::st_crs(sf_grid_correct_set))
+        nearest_idx <- sf::st_nearest_feature(
+          x = sf_grid_correct_set,
+          y = road
+        )
+        road_nearest <- road[nearest_idx, ]
+        dist_road_nearest <-
+          sf::st_distance(
+            x = sf_grid_correct_set,
+            y = road_nearest,
+            by_element = TRUE
+          )
+        sf_grid_dist_att <-
+          sf_grid_correct_set |>
+          dplyr::mutate(
+            d_road = dist_road_nearest
+          )
+        sf_grid_dist_att
+
+      },
+      iteration = "list",
+      pattern = map(sf_grid_correct_set)
     ),
     targets::tar_target(
       name = df_feat_grid_dsm,
-      command = chopin::extract_at(
-        x = chr_dsm_file,
-        y = sf_monitors_correct,
-        radius = 1e-6,
-        force_df = TRUE
-      )
+      command = {
+        chopin::extract_at(
+          x = chr_dsm_file,
+          y = sf_grid_correct_set,
+          radius = 1e-6,
+          force_df = TRUE
+        )
+      },
+      iteration = "list",
+      pattern = map(sf_grid_correct_set)
     ),
     targets::tar_target(
       name = df_feat_grid_dem,
-      command = chopin::extract_at(
-        x = chr_dem_file,
-        y = sf_monitors_correct,
-        radius = 1e-6,
-        force_df = TRUE
-      )
+      command = {
+        chopin::extract_at(
+          x = chr_dem_file,
+          y = sf_grid_correct_set,
+          radius = 1e-6,
+          force_df = TRUE
+        )
+      },
+      iteration = "list",
+      pattern = map(sf_grid_correct_set)
     ),
     targets::tar_target(
       name = df_feat_grid_landuse,
@@ -383,6 +424,8 @@ list_process_feature <-
           radius = 1e-6,
           force_df = TRUE
         )
-      }
+      },
+      iteration = "list",
+      pattern = map(sf_grid_correct_set)
     )
   )
