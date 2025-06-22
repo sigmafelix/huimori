@@ -243,11 +243,16 @@ list_process_split <-
     ),
     targets::tar_target(
       name = sf_grid_size,
-      command = sf::st_make_grid(
-        sf_monitors_correct,
-        cellsize = int_grid_size,
-        what = "centers"
-      ),
+      command = {
+        sf::st_make_grid(
+          sf_monitors_correct,
+          cellsize = int_grid_size,
+          what = "centers"
+        ) %>%
+        sf::st_as_sf() %>%
+        dplyr::mutate(gid = seq_len(n()))
+      }
+      ,
       iteration = "list",
       pattern = map(int_grid_size)
     ),
@@ -346,6 +351,23 @@ list_process_feature <-
       }
     ),
     targets::tar_target(
+      name = df_feat_correct_merged,
+      command = {
+        purrr::reduce(
+          .x = 
+          list(
+            sf_monitors_correct,
+            df_feat_correct_d_road,
+            df_feat_correct_dsm,
+            df_feat_correct_dem,
+            df_feat_correct_landuse
+          ),
+          .f = collapse::join,
+          on = c("TMSID", "TMSID2", "year")
+        )
+      }
+    ),
+    targets::tar_target(
       name = df_feat_grid_d_road,
       command = {
         road <- sf::st_read(chr_road_files[[11]], quiet = TRUE)
@@ -427,5 +449,24 @@ list_process_feature <-
       },
       iteration = "list",
       pattern = map(sf_grid_correct_set)
-    )
+    ),
+    targets::tar_target(
+      name = df_feat_grid_merged,
+      command = {
+        purrr::reduce(
+          .x = 
+          list(
+            sf_grid_correct_set,
+            df_feat_grid_d_road,
+            df_feat_grid_dsm,
+            df_feat_grid_dem,
+            df_feat_grid_landuse
+          ),
+          .f = collapse::join,
+          on = "gid"
+        )
+      },
+      iteration = "list",
+      pattern = map(sf_grid_correct_set)
   )
+)
