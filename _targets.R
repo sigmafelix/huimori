@@ -47,5 +47,7 @@ list(
   list_basefiles,
   list_process_site,
   list_process_feature,
+  list_process_split,
+  list_fit_models,
   list_tune_models
 )

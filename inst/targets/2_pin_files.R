@@ -5,8 +5,13 @@ list_basefiles <-
       command = file.path(chr_dir_git, "data/sites", "sites_history_cleaning_20250311.xlsx")
     ),
     targets::tar_target(
+      name = chr_measurement_dir,
+      command = file.path("/home/felix", "Documents")
+      # "/mnt/s/", "Korea", "airquality", "outdoor",
+    ),
+    targets::tar_target(
       name = chr_measurement_file,
-      command = file.path("/mnt/s/", "Korea", "airquality", "outdoor", "sites_airkorea_2010_2023_spt_yd.parquet")
+      command = file.path(chr_measurement_dir, "sites_airkorea_2010_2023_spt_yd.parquet")
     ),
     targets::tar_target(
       name = chr_landuse_file,

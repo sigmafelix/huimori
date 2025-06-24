@@ -6,7 +6,8 @@ list_fit_models <-
       name = chr_terms_x,
       command = {
         c(
-
+          "dsm", "dem", "d_nodelink",
+          sprintf("class_%02d", c(1,3,11,13,14,15,16,21,22,31,32))
         )
       }
     )
@@ -41,7 +42,6 @@ list_fit_models <-
       }
     )
   )
-
 
 
 list_tune_models <-
