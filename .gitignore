@@ -2,3 +2,4 @@
 /_targets
 **/meta
 _targets/meta/meta
+container/*.sif

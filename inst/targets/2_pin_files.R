@@ -6,8 +6,8 @@ list_basefiles <-
     ),
     targets::tar_target(
       name = chr_measurement_dir,
-      command = file.path("/home/felix", "Documents")
-      # "/mnt/s/", "Korea", "airquality", "outdoor",
+      # command = file.path("/home/felix", "Documents")
+      command = file.path(chr_dir_data, "airquality", "outdoor")
     ),
     targets::tar_target(
       name = chr_measurement_file,
@@ -42,5 +42,17 @@ list_basefiles <-
     targets::tar_target(
       name = chr_asos_site_file,
       command = file.path(chr_dir_data, "weather", "data", "asos_sites.xlsx")
+    ),
+    targets::tar_target(
+      name = sf_korea_all,
+      command = {
+        geodata::geodata_path(file.path("~", "geodatacache"))
+        geodata::gadm(
+          country = "KOR",
+          level = 0
+        ) %>%
+        sf::st_as_sf() %>%
+        sf::st_transform("EPSG:5179")
+      }
     )
   )

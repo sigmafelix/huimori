@@ -138,7 +138,8 @@ list_process_site <-
           dplyr::full_join(
             ak_sites_annual,
             by = c("TMSID", "TMSID2", "year")
-          )
+          ) |>
+          dplyr::filter(!sf::st_is_empty(geometry))
         sites_sf
 
       }
@@ -238,14 +239,26 @@ list_process_split <-
     ),
     targets::tar_target(
       name = int_size_split,
-      command = c(20, 10, 5, 2),
+      command = c(20L, 10L, 5L, 2L),
       iteration = "list"
     ),
     targets::tar_target(
       name = sf_grid_size,
       command = {
+        # sf_monitors_ext <-
+        #   sf::st_bbox(sf_monitors_correct) %>%
+        #   sf::st_as_sfc() %>%
+        #   sf::st_as_sf() %>%
+        #   sf::st_buffer(
+        #     endCapStyle = "SQUARE",
+        #     joinStyle = "MITRE",
+        #     dist = 5000
+        #   )
+        korea_poly <- sf_korea_all |>
+          sf::st_make_valid() |>
+          sf::st_buffer(1000)
         sf::st_make_grid(
-          sf_monitors_correct,
+          korea_poly,
           cellsize = int_grid_size,
           what = "centers"
         ) %>%
@@ -354,14 +367,14 @@ list_process_feature <-
       name = df_feat_correct_merged,
       command = {
         purrr::reduce(
-          .x = 
-          list(
-            sf_monitors_correct,
-            df_feat_correct_d_road,
-            df_feat_correct_dsm,
-            df_feat_correct_dem,
-            df_feat_correct_landuse
-          ),
+          .x =
+            list(
+              sf_monitors_correct,
+              df_feat_correct_d_road,
+              df_feat_correct_dsm,
+              df_feat_correct_dem,
+              df_feat_correct_landuse
+            ),
           .f = collapse::join,
           on = c("TMSID", "TMSID2", "year")
         )
@@ -423,7 +436,9 @@ list_process_feature <-
     targets::tar_target(
       name = df_feat_grid_landuse,
       command = {
-        landuse_ras <- terra::rast(chr_landuse_file)
+        landuse_ras <-
+          terra::rast(chr_landuse_file, win = c(124, 132.5, 33, 38.6))
+
         flt7 <-
           matrix(
             c(0, 0, 1, 1, 1, 0, 0,
@@ -435,17 +450,17 @@ list_process_feature <-
               0, 0, 1, 1, 1, 0, 0),
             nrow = 7, ncol = 7, byrow = TRUE
           )
-        landuse_freq <-
-          huimori::rasterize_freq(
-            ras = landuse_ras,
-            mat = flt7
-          )
-        chopin::extract_at(
-          x = landuse_freq,
-          y = sf_grid_correct_set,
-          radius = 1e-6,
-          force_df = TRUE
-        )
+        # landuse_freq <-
+        #   huimori::rasterize_freq(
+        #     ras = landuse_ras,
+        #     mat = flt7
+        #   )
+        # chopin::extract_at(
+        #   x = landuse_freq,
+        #   y = sf_grid_correct_set,
+        #   radius = 1e-6,
+        #   force_df = TRUE
+        # )
       },
       iteration = "list",
       pattern = map(sf_grid_correct_set)
