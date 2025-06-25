@@ -33,7 +33,7 @@ rasterize_freq <-
     counted <- Map(function(x) {
       terra::focal(x = x, w = mat, fun = \(k) sum(k != 0))
     }, mask)
-    return(counted)
+
     rcounted <- Reduce(c, counted)
     rcountedw <- rcounted / sum(mat)
     names(rcountedw) <- sprintf("class_%02d", vec_cl)

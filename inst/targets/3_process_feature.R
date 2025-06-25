@@ -239,7 +239,7 @@ list_process_split <-
     ),
     targets::tar_target(
       name = int_size_split,
-      command = c(20L, 10L, 5L, 2L),
+      command = c(50L, 20L, 10L, 2L),
       iteration = "list"
     ),
     targets::tar_target(
@@ -338,7 +338,11 @@ list_process_feature <-
     targets::tar_target(
       name = df_feat_correct_landuse,
       command = {
-        landuse_ras <- terra::rast(chr_landuse_file)
+        landuse_ras <-
+          terra::rast(
+            chr_landuse_file,
+            win = c(124, 132.5, 33, 38.6)
+          )
         flt7 <-
           matrix(
             c(0, 0, 1, 1, 1, 0, 0,
@@ -450,17 +454,17 @@ list_process_feature <-
               0, 0, 1, 1, 1, 0, 0),
             nrow = 7, ncol = 7, byrow = TRUE
           )
-        # landuse_freq <-
-        #   huimori::rasterize_freq(
-        #     ras = landuse_ras,
-        #     mat = flt7
-        #   )
-        # chopin::extract_at(
-        #   x = landuse_freq,
-        #   y = sf_grid_correct_set,
-        #   radius = 1e-6,
-        #   force_df = TRUE
-        # )
+        landuse_freq <-
+          huimori::rasterize_freq(
+            ras = landuse_ras,
+            mat = flt7
+          )
+        chopin::extract_at(
+          x = landuse_freq,
+          y = sf_grid_correct_set,
+          radius = 1e-6,
+          force_df = TRUE
+        )
       },
       iteration = "list",
       pattern = map(sf_grid_correct_set)
