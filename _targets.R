@@ -4,6 +4,9 @@ library(tarchetypes) # Load other packages as needed.
 library(terra)
 library(chopin)
 library(crew)
+library(sf)
+
+sf::sf_use_s2(FALSE) # Disable S2 geometry library for sf package.
 
 # set controllers
 controller_01 <-

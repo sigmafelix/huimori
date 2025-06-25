@@ -234,12 +234,12 @@ list_process_split <-
   list(
     targets::tar_target(
       name = int_grid_size,
-      command = c(50, 100, 250, 500),
+      command = c(100L),#, 100, 250, 500),
       iteration = "list"
     ),
     targets::tar_target(
       name = int_size_split,
-      command = c(50L, 20L, 10L, 2L),
+      command = c(50L),#, 20L, 10L, 2L),
       iteration = "list"
     ),
     targets::tar_target(
@@ -255,8 +255,8 @@ list_process_split <-
         #     dist = 5000
         #   )
         korea_poly <- sf_korea_all |>
-          sf::st_make_valid() |>
-          sf::st_buffer(1000)
+          sf::st_buffer(1000) |>
+          sf::st_simplify(preserveTopology = TRUE, dTolerance = 100)
         sf::st_make_grid(
           korea_poly,
           cellsize = int_grid_size,
@@ -266,20 +266,20 @@ list_process_split <-
         dplyr::mutate(gid = seq_len(n()))
       }
       ,
-      iteration = "list",
+      # iteration = "list",
       pattern = map(int_grid_size)
     ),
     targets::tar_target(
       name = sf_grid_correct_split,
       command = chopin::par_pad_grid(
-        input = sf_grid_size,
+        input = sf_grid_size %>% sf::st_sample(5e5),
         mode = "grid",
         nx = int_size_split,
         ny = int_size_split,
         padding = 10
       )$original,
       iteration = "list",
-      pattern = map(sf_grid_size, int_size_split)
+      pattern = map(int_size_split)
     ),
     targets::tar_target(
       name = sf_grid_correct_set,
