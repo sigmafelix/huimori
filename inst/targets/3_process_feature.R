@@ -423,7 +423,12 @@ list_process_feature <-
             dsm = unlist(df_feat_correct_dsm),
             dem = unlist(df_feat_correct_dem)
           ) %>%
-          sf::st_drop_geometry()
+          sf::st_drop_geometry() %>%
+          dplyr::mutate(
+            d_road = as.numeric(d_road) / 1000,
+            dsm = as.numeric(dsm),
+            dem = as.numeric(dem)
+          )
         names(df_res) <- sub("mean.", "", names(df_res))
         df_res
       }
@@ -525,7 +530,12 @@ list_process_feature <-
           dplyr::mutate(
             dsm = unlist(df_feat_incorrect_dsm),
             dem = unlist(df_feat_incorrect_dem),
-          )
+          ) %>%
+          dplyr::mutate(
+            d_road = as.numeric(d_road) / 1000,
+            dsm = as.numeric(dsm),
+            dem = as.numeric(dem)
+          ) %>%
           sf::st_drop_geometry()
         names(df_res) <- sub("mean.", "", names(df_res))
         df_res

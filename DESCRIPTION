@@ -7,6 +7,8 @@ Description: Reproducible pipeline for hybrid urban-rural integrated modeling in
     The package provides functions to download, process, and visualize data
     related to urban and rural areas and the main pipeline is based on targets.
 Imports:
+    targets (>= 1.11.3),
+    tarchetypes,
     terra,
     INLA,
     sf,

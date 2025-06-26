@@ -951,6 +951,7 @@ pred_tmb <-
 #'
 #' @examples
 #' \dontrun{
+#' data()
 #' fit_tidy_xgb(data = my_data, formula = y ~ ., invars = names(my_data)[-1])
 #' }
 #' @export
@@ -968,7 +969,8 @@ fit_tidy_xgb <-
 
     xgb_rec <-
       recipe(formula, data = data) |>
-      step_pca(starts_with("class_"), num_comp = 5) |>
+      recipes::step_zv(all_predictors()) |>
+      # step_pca(starts_with("class_"), num_comp = 3) |>
       step_normalize(all_predictors())
 
     xgb_wf <-
@@ -979,19 +981,20 @@ fit_tidy_xgb <-
     tuneset <-
       hardhat::extract_parameter_set_dials(xgb_wf) |>
       dials::grid_space_filling(
-        min_n(c(2, 12)),
+        min_n(c(3, 10)),
         tree_depth(c(3, 10)),
         learn_rate(range = c(-4, -1), trans = transform_log10()),
         size = 50
       )
 
+    mset <- yardstick::metric_set(
+          yardstick::rmse, yardstick::mae)
     xgb_res <-
       xgb_wf |>
       finetune::tune_race_anova(
         resamples = vfold_cv(data, v = 5),
         grid = tuneset,
-        metrics = yardstick::metric_set(
-          yardstick::rmse, yardstick::mae),
+        metrics = mset,
         control = control_race(verbose = TRUE, verbose_elim = TRUE)
       )
 

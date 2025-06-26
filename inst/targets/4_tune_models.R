@@ -53,8 +53,10 @@ list_tune_models <-
     targets::tar_target(
       name = workflow_tune_correct_spatial,
       command = {
+        yvar <- as.character(form_fit)[2]
         data_sub <- df_feat_correct_merged %>%
-          dplyr::filter(year == int_years_spatial)
+          dplyr::filter(year == int_years_spatial) %>%
+          .[!is.na(.[[yvar]]), ] # Filter out NA values for the outcome variable
         fit_tidy_xgb(
           data = data_sub,
           formula = form_fit,
@@ -62,13 +64,18 @@ list_tune_models <-
         )
       },
       pattern = cross(int_years_spatial, form_fit),
-      iteration = "list"
+      iteration = "list",
+      resources = targets::tar_resources(
+        crew = targets::tar_resources_crew(controller = "controller_08")
+      )
     ),
     targets::tar_target(
       name = workflow_tune_incorrect_spatial,
       command = {
+        yvar <- as.character(form_fit)[2]
         data_sub <- df_feat_incorrect_merged %>%
-          dplyr::filter(year == int_years_spatial)
+          dplyr::filter(year == int_years_spatial) %>%
+          .[!is.na(.[[yvar]]), ] # Filter out NA values for the outcome variable
         fit_tidy_xgb(
           data = data_sub,
           formula = form_fit,
@@ -76,7 +83,10 @@ list_tune_models <-
         )
       },
       pattern = cross(int_years_spatial, form_fit),
-      iteration = "list"
+      iteration = "list",
+      resources = targets::tar_resources(
+        crew = targets::tar_resources_crew(controller = "controller_08")
+      )
     ),
     targets::tar_target(
       name = workflow_tune_correct_full,
