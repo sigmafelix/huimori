@@ -263,7 +263,7 @@ list_process_split <-
           what = "centers"
         ) %>%
         sf::st_as_sf() %>%
-        dplyr::mutate(gid = seq_len(n())) %>%
+        dplyr::mutate(gid = seq_len(dplyr::n())) %>%
         dplyr::bind_cols(
           dplyr::as_tibble(sf::st_coordinates(.))
         ) %>%
@@ -318,7 +318,7 @@ list_process_split <-
       },
       # iteration = "group",
       pattern = map(sf_grid_correct_split_a)
-      #pattern = cross(sf_grid_size, sf_grid_correct_split)
+      # pattern = cross(sf_grid_size, sf_grid_correct_split)
     )
   )
 
@@ -329,7 +329,7 @@ list_process_feature <-
     targets::tar_target(
       name = df_feat_correct_d_road,
       command = {
-        road <- sf::st_read(chr_road_files[[11]], quiet = TRUE)
+        road <- sf::st_read(chr_road_files, quiet = TRUE)
         road <- sf::st_transform(road, sf::st_crs(sf_monitors_correct))
         nearest_idx <- sf::st_nearest_feature(
           x = sf_monitors_correct,
@@ -344,6 +344,9 @@ list_process_feature <-
           )
         sf_monitors_dist_att <-
           sf_monitors_correct |>
+          dplyr::select(
+            TMSID, TMSID2, year
+          ) |>
           dplyr::mutate(
             d_road = dist_road_nearest
           )
@@ -403,20 +406,132 @@ list_process_feature <-
     targets::tar_target(
       name = df_feat_correct_merged,
       command = {
-        purrr::reduce(
-          .x =
-            list(
-              sf_monitors_correct,
-              df_feat_correct_d_road,
-              df_feat_correct_dsm,
-              df_feat_correct_dem,
-              df_feat_correct_landuse
-            ),
-          .f = collapse::join,
-          on = c("TMSID", "TMSID2", "year")
+        df_res <-
+          purrr::reduce(
+            .x =
+              list(
+                sf_monitors_correct,
+                df_feat_correct_d_road
+              ),
+            .f = collapse::join,
+            on = c("TMSID", "TMSID2", "year")
+          ) %>%
+          dplyr::bind_cols(
+            df_feat_correct_landuse
+          ) %>%
+          dplyr::mutate(
+            dsm = unlist(df_feat_correct_dsm),
+            dem = unlist(df_feat_correct_dem)
+          ) %>%
+          sf::st_drop_geometry()
+        names(df_res) <- sub("mean.", "", names(df_res))
+        df_res
+      }
+    ),
+    # Incorrect addresses
+   targets::tar_target(
+      name = df_feat_incorrect_d_road,
+      command = {
+        road <- sf::st_read(chr_road_files, quiet = TRUE)
+        road <- sf::st_transform(road, sf::st_crs(sf_monitors_incorrect))
+        nearest_idx <- sf::st_nearest_feature(
+          x = sf_monitors_incorrect,
+          y = road
+        )
+        road_nearest <- road[nearest_idx, ]
+        dist_road_nearest <-
+          sf::st_distance(
+            x = sf_monitors_incorrect,
+            y = road_nearest,
+            by_element = TRUE
+          )
+        sf_monitors_dist_att <-
+          sf_monitors_incorrect |>
+          dplyr::select(
+            TMSID, TMSID2, year
+          ) |>
+          dplyr::mutate(
+            d_road = dist_road_nearest
+          )
+        sf_monitors_dist_att
+      }
+    ),
+    targets::tar_target(
+      name = df_feat_incorrect_dsm,
+      command = chopin::extract_at(
+        x = chr_dsm_file,
+        y = sf_monitors_incorrect,
+        radius = 1e-6,
+        force_df = TRUE
+      )
+    ),
+    targets::tar_target(
+      name = df_feat_incorrect_dem,
+      command = chopin::extract_at(
+        x = chr_dem_file,
+        y = sf_monitors_incorrect,
+        radius = 1e-6,
+        force_df = TRUE
+      )
+    ),
+    targets::tar_target(
+      name = df_feat_incorrect_landuse,
+      command = {
+        landuse_ras <-
+          terra::rast(
+            chr_landuse_file,
+            win = c(124, 132.5, 33, 38.6)
+          )
+        flt7 <-
+          matrix(
+            c(0, 0, 1, 1, 1, 0, 0,
+              0, 1, 1, 1, 1, 1, 0,
+              1, 1, 1, 1, 1, 1, 1,
+              1, 1, 1, 1, 1, 1, 1,
+              1, 1, 1, 1, 1, 1, 1,
+              0, 1, 1, 1, 1, 1, 0,
+              0, 0, 1, 1, 1, 0, 0),
+            nrow = 7, ncol = 7, byrow = TRUE
+          )
+        landuse_freq <-
+          huimori::rasterize_freq(
+            ras = landuse_ras,
+            mat = flt7
+          )
+        chopin::extract_at(
+          x = landuse_freq,
+          y = sf_monitors_incorrect,
+          radius = 1e-6,
+          force_df = TRUE
         )
       }
     ),
+    targets::tar_target(
+      name = df_feat_incorrect_merged,
+      command = {
+        df_res <-
+          purrr::reduce(
+            .x =
+              list(
+                sf_monitors_incorrect,
+                df_feat_incorrect_d_road
+              ),
+            .f = collapse::join,
+            on = c("TMSID", "TMSID2", "year")
+          ) %>%
+          dplyr::bind_cols(
+            df_feat_incorrect_landuse
+          ) %>%
+          dplyr::mutate(
+            dsm = unlist(df_feat_incorrect_dsm),
+            dem = unlist(df_feat_incorrect_dem),
+          )
+          sf::st_drop_geometry()
+        names(df_res) <- sub("mean.", "", names(df_res))
+        df_res
+      }
+    ),
+    # Grid point features
     targets::tar_target(
       name = df_feat_grid_d_road,
       command = {

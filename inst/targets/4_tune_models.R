@@ -6,7 +6,7 @@ list_fit_models <-
       name = chr_terms_x,
       command = {
         c(
-          "dsm", "dem", "d_nodelink",
+          "dsm", "dem", "d_road",
           sprintf("class_%02d", c(1,3,11,13,14,15,16,21,22,31,32))
         )
       }
@@ -47,58 +47,60 @@ list_fit_models <-
 list_tune_models <-
   list(
     targets::tar_target(
-      name = workflow_tune,
+      name = int_years_spatial,
+      command = seq(2015, 2023, 1)
+    ),
+    targets::tar_target(
+      name = workflow_tune_correct_spatial,
       command = {
-        fit_tidy_xgb <-
-          function(data, formula, invars, nrounds = 1000) {
-            xgb_spec <-
-              boost_tree(
-                mode = "regression",
-                trees = nrounds,
-                min_n = tune(),
-                tree_depth = tune(),
-                learn_rate = tune()
-              ) |>
-              set_engine("xgboost")
-
-            xgb_rec <-
-              recipe(formula, data = data) |>
-              step_pca(starts_with("class_"), num_comp = 5) |>
-              step_normalize(all_predictors())
-
-            xgb_wf <-
-              workflow() |>
-              add_recipe(xgb_rec) |>
-              add_model(xgb_spec)
-
-            tuneset <-
-              hardhat::extract_parameter_set_dials(xgb_wf) |>
-              grid_space_filling(
-                min_n(c(2, 12)),
-                tree_depth(c(3, 10)),
-                learn_rate(range = c(-4, -1), trans = transform_log10()),
-                size = 50
-              )
-
-            xgb_res <-
-              xgb_wf |>
-              finetune::tune_race_anova(
-                resamples = vfold_cv(data, v = 5),
-                grid = tuneset,
-                metric_set(rmse, rsq),
-                control = control_race(verbose = TRUE)
-              )
-
-            return(xgb_res)
-          }
-        fitted_xgb_model <-
-          fit_tidy_xgb(
-            data = df_feat_correct_merged,
-            formula = form_fit,
-            invars = chr_terms_x
-          )
+        data_sub <- df_feat_correct_merged %>%
+          dplyr::filter(year == int_years_spatial)
+        fit_tidy_xgb(
+          data = data_sub,
+          formula = form_fit,
+          invars = chr_terms_x
+        )
+      },
+      pattern = cross(int_years_spatial, form_fit),
+      iteration = "list"
+    ),
+    targets::tar_target(
+      name = workflow_tune_incorrect_spatial,
+      command = {
+        data_sub <- df_feat_incorrect_merged %>%
+          dplyr::filter(year == int_years_spatial)
+        fit_tidy_xgb(
+          data = data_sub,
+          formula = form_fit,
+          invars = chr_terms_x
+        )
+      },
+      pattern = cross(int_years_spatial, form_fit),
+      iteration = "list"
+    ),
+    targets::tar_target(
+      name = workflow_tune_correct_full,
+      command = {
+        fit_tidy_xgb(
+          data = df_feat_correct_merged,
+          formula = form_fit,
+          invars = chr_terms_x
+        )
+      },
+      pattern = map(form_fit),
+      iteration = "list"
+    ),
+    targets::tar_target(
+      name = workflow_tune_incorrect_full,
+      command = {
+        fit_tidy_xgb(
+          data = df_feat_incorrect_merged,
+          formula = form_fit,
+          invars = chr_terms_x
+        )
       },
       pattern = map(form_fit),
       iteration = "list"
     )
+
   )

@@ -1,7 +1,7 @@
 # Load packages required to define the pipeliine:
 library(targets)
 library(tarchetypes)
-library(geotargets)
+# library(geotargets)
 library(terra)
 library(chopin)
 library(crew)
@@ -12,6 +12,8 @@ sf::sf_use_s2(FALSE) # Disable S2 geometry library for sf package.
 # set controllers
 controller_01 <-
   crew::crew_controller_local(name = "controller_01", workers = 1)
+controller_08 <-
+  crew::crew_controller_local(name = "controller_08", workers = 8)
 controller_10 <-
   crew::crew_controller_local(name = "controller_10", workers = 10)
 controller_15 <-
@@ -23,13 +25,16 @@ controller_15 <-
 # Set target options:
 targets::tar_option_set(
   packages =
-    c("targets", "geotargets", "terra", "sf", "dplyr", "collapse",
+    c("targets",# "geotargets", 
+      "terra", "sf", "dplyr", "collapse",
       "data.table", "tibble", "tune", "yardstick", "workflows",
+      "recipes", "dials",
       "chopin", "mirai", "parsnip", "finetune", "huimori", "nanoparquet",
       "readxl"),
   format = "qs", # Optionally set the default storage format. qs is fast.
   controller = crew::crew_controller_group(
     controller_01,
+    controller_08,
     controller_10,
     controller_15
   ),

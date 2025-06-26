@@ -920,3 +920,80 @@ pred_tmb <-
       dplyr::select(lon, lat, dplyr::all_of(invars))
     predict(fit, newdata = df)
   }
+
+
+
+#' Fit a Tuned XGBoost Regression Model with Tidymodels
+#'
+#' This function fits an XGBoost regression model using the tidymodels framework. It performs PCA on predictors starting with "class_", normalizes all predictors, and tunes hyperparameters (`min_n`, `tree_depth`, `learn_rate`) using a space-filling grid and ANOVA racing. The function returns the tuning results.
+#'
+#' @param data A data frame containing the training data.
+#' @param formula A formula specifying the model.
+#' @param invars A character vector of input variable names (not directly used in the function, but included for interface consistency).
+#' @param nrounds Integer. Number of boosting rounds (trees) for XGBoost. Default is 1000.
+#'
+#' @return A `tune_race_anova` object containing the tuning results.
+#'
+#' @details
+#' - Applies PCA to predictors starting with "class_" (5 components).
+#' - Normalizes all predictors.
+#' - Tunes `min_n`, `tree_depth`, and `learn_rate` over a space-filling grid (size 50).
+#' - Uses 5-fold cross-validation and evaluates RMSE and R-squared.
+#'
+#' @import tidymodels
+#' @import finetune
+#' @importFrom recipes step_pca step_normalize
+#' @importFrom dials min_n tree_depth learn_rate grid_space_filling
+#' @importFrom hardhat extract_parameter_set_dials
+#' @importFrom yardstick rmse rsq metric_set
+#' @importFrom workflows workflow add_recipe add_model
+#' @importFrom rsample vfold_cv
+#'
+#' @examples
+#' \dontrun{
+#' fit_tidy_xgb(data = my_data, formula = y ~ ., invars = names(my_data)[-1])
+#' }
+#' @export
+fit_tidy_xgb <-
+  function(data, formula, invars, nrounds = 1000) {
+    xgb_spec <-
+      boost_tree(
+        mode = "regression",
+        trees = nrounds,
+        min_n = tune(),
+        tree_depth = tune(),
+        learn_rate = tune()
+      ) |>
+      set_engine("xgboost")
+
+    xgb_rec <-
+      recipe(formula, data = data) |>
+      step_pca(starts_with("class_"), num_comp = 5) |>
+      step_normalize(all_predictors())
+
+    xgb_wf <-
+      workflow() |>
+      add_recipe(xgb_rec) |>
+      add_model(xgb_spec)
+
+    tuneset <-
+      hardhat::extract_parameter_set_dials(xgb_wf) |>
+      dials::grid_space_filling(
+        min_n(c(2, 12)),
+        tree_depth(c(3, 10)),
+        learn_rate(range = c(-4, -1), trans = transform_log10()),
+        size = 50
+      )
+
+    xgb_res <-
+      xgb_wf |>
+      finetune::tune_race_anova(
+        resamples = vfold_cv(data, v = 5),
+        grid = tuneset,
+        metrics = yardstick::metric_set(
+          yardstick::rmse, yardstick::mae),
+        control = control_race(verbose = TRUE, verbose_elim = TRUE)
+      )
+
+    return(xgb_res)
+  }
