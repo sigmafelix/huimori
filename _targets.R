@@ -1,6 +1,7 @@
 # Load packages required to define the pipeliine:
 library(targets)
-library(tarchetypes) # Load other packages as needed.
+library(tarchetypes)
+library(geotargets)
 library(terra)
 library(chopin)
 library(crew)
@@ -10,11 +11,11 @@ sf::sf_use_s2(FALSE) # Disable S2 geometry library for sf package.
 
 # set controllers
 controller_01 <-
-  crew::crew_controller_local(workers = 1)
-controller_10 <- 
-  crew::crew_controller_local(workers = 10)
+  crew::crew_controller_local(name = "controller_01", workers = 1)
+controller_10 <-
+  crew::crew_controller_local(name = "controller_10", workers = 10)
 controller_15 <-
-  crew::crew_controller_local(workers = 15)
+  crew::crew_controller_local(name = "controller_15", workers = 15)
 
 
 
@@ -22,7 +23,7 @@ controller_15 <-
 # Set target options:
 targets::tar_option_set(
   packages =
-    c("targets", "terra", "sf", "dplyr", "collapse",
+    c("targets", "geotargets", "terra", "sf", "dplyr", "collapse",
       "data.table", "tibble", "tune", "yardstick", "workflows",
       "chopin", "mirai", "parsnip", "finetune", "huimori", "nanoparquet",
       "readxl"),

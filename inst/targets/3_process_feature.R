@@ -263,7 +263,11 @@ list_process_split <-
           what = "centers"
         ) %>%
         sf::st_as_sf() %>%
-        dplyr::mutate(gid = seq_len(n()))
+        dplyr::mutate(gid = seq_len(n())) %>%
+        dplyr::bind_cols(
+          dplyr::as_tibble(sf::st_coordinates(.))
+        ) %>%
+        sf::st_drop_geometry()
       }
       ,
       # iteration = "list",
@@ -271,21 +275,50 @@ list_process_split <-
     ),
     targets::tar_target(
       name = sf_grid_correct_split,
-      command = chopin::par_pad_grid(
-        input = sf_grid_size %>% sf::st_sample(5e5),
-        mode = "grid",
-        nx = int_size_split,
-        ny = int_size_split,
-        padding = 10
-      )$original,
+      command = {
+        grid_org <-
+          chopin::par_pad_grid(
+            input = sf_korea_all,
+            mode = "grid",
+            nx = int_size_split,
+            ny = int_size_split,
+            padding = 10
+          )$original
+        grid_org[sf_korea_all, ]
+      },
+      iteration = "vector"
+    ),
+    targets::tar_target(
+      list_pred_calc_grid,
+      command = {
+        grid_unit <- sf::st_bbox(sf_grid_correct_split)
+        sf::st_as_sf(
+          sf_grid_size |>
+            dplyr::filter(
+              (X <= grid_unit[3] & Y >= grid_unit[1]) &
+              (X <= grid_unit[4] & Y >= grid_unit[2])
+            ),
+          coords = c("X", "Y"),
+          crs = 5179,
+          remove = FALSE
+        )
+      },
       iteration = "list",
-      pattern = map(int_size_split)
+      pattern = map(sf_grid_correct_split),
+      description = "Split prediction grid into list by chopin grid",
+      resources = targets::tar_resources(
+        crew = targets::tar_resources_crew(controller = "controller_15")
+      )
     ),
     targets::tar_target(
       name = sf_grid_correct_set,
-      command = sf_grid_size[sf_grid_correct_split, ],
-      iteration = "list",
-      pattern = cross(sf_grid_size, sf_grid_correct_split)
+      command = {
+        sf_grid_size[list_pred_calc_g, ] %>%
+          as.data.frame(xy = TRUE)
+      },
+      # iteration = "group",
+      pattern = map(sf_grid_correct_split_a)
+      #pattern = cross(sf_grid_size, sf_grid_correct_split)
     )
   )
 
