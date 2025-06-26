@@ -285,18 +285,22 @@ list_process_split <-
             padding = 10
           )$original
         grid_org[sf_korea_all, ]
-      },
-      iteration = "vector"
+      }
+    ),
+    targets::tar_target(
+      name = int_split_grid_ids,
+      command = seq_len(nrow(sf_grid_correct_split)),
+      iteration = "list"
     ),
     targets::tar_target(
       list_pred_calc_grid,
       command = {
-        grid_unit <- sf::st_bbox(sf_grid_correct_split)
+        grid_unit <- sf::st_bbox(sf_grid_correct_split[int_split_grid_ids, ])
         sf::st_as_sf(
           sf_grid_size |>
             dplyr::filter(
-              (X <= grid_unit[3] & Y >= grid_unit[1]) &
-              (X <= grid_unit[4] & Y >= grid_unit[2])
+              (X <= grid_unit[3] & X >= grid_unit[1]) &
+              (Y <= grid_unit[4] & Y >= grid_unit[2])
             ),
           coords = c("X", "Y"),
           crs = 5179,
@@ -304,21 +308,11 @@ list_process_split <-
         )
       },
       iteration = "list",
-      pattern = map(sf_grid_correct_split),
+      pattern = map(int_split_grid_ids),
       description = "Split prediction grid into list by chopin grid",
       resources = targets::tar_resources(
         crew = targets::tar_resources_crew(controller = "controller_15")
       )
-    ),
-    targets::tar_target(
-      name = sf_grid_correct_set,
-      command = {
-        sf_grid_size[list_pred_calc_g, ] %>%
-          as.data.frame(xy = TRUE)
-      },
-      # iteration = "group",
-      pattern = map(sf_grid_correct_split_a)
-      # pattern = cross(sf_grid_size, sf_grid_correct_split)
     )
   )
 
@@ -548,13 +542,13 @@ list_process_feature <-
         road <- sf::st_read(chr_road_files[[11]], quiet = TRUE)
         road <- sf::st_transform(road, sf::st_crs(sf_grid_correct_set))
         nearest_idx <- sf::st_nearest_feature(
-          x = sf_grid_correct_set,
+          x = list_pred_calc_grid,
           y = road
         )
         road_nearest <- road[nearest_idx, ]
         dist_road_nearest <-
           sf::st_distance(
-            x = sf_grid_correct_set,
+            x = list_pred_calc_grid,
             y = road_nearest,
             by_element = TRUE
           )
@@ -567,33 +561,39 @@ list_process_feature <-
 
       },
       iteration = "list",
-      pattern = map(sf_grid_correct_set)
+      pattern = map(list_pred_calc_grid)
     ),
     targets::tar_target(
       name = df_feat_grid_dsm,
       command = {
         chopin::extract_at(
           x = chr_dsm_file,
-          y = sf_grid_correct_set,
+          y = list_pred_calc_grid,
           radius = 1e-6,
           force_df = TRUE
         )
       },
       iteration = "list",
-      pattern = map(sf_grid_correct_set)
+      pattern = map(list_pred_calc_grid),
+      resources = targets::tar_resources(
+        crew = targets::tar_resources_crew(controller = "controller_08")
+      )
     ),
     targets::tar_target(
       name = df_feat_grid_dem,
       command = {
         chopin::extract_at(
           x = chr_dem_file,
-          y = sf_grid_correct_set,
+          y = list_pred_calc_grid,
           radius = 1e-6,
           force_df = TRUE
         )
       },
       iteration = "list",
-      pattern = map(sf_grid_correct_set)
+      pattern = map(list_pred_calc_grid),
+      resources = targets::tar_resources(
+        crew = targets::tar_resources_crew(controller = "controller_08")
+      )
     ),
     targets::tar_target(
       name = df_feat_grid_landuse,
@@ -619,13 +619,13 @@ list_process_feature <-
           )
         chopin::extract_at(
           x = landuse_freq,
-          y = sf_grid_correct_set,
+          y = list_pred_calc_grid,
           radius = 1e-6,
           force_df = TRUE
         )
       },
       iteration = "list",
-      pattern = map(sf_grid_correct_set)
+      pattern = map(list_pred_calc_grid)
     ),
     targets::tar_target(
       name = df_feat_grid_merged,
@@ -633,17 +633,28 @@ list_process_feature <-
         purrr::reduce(
           .x = 
           list(
-            sf_grid_correct_set,
-            df_feat_grid_d_road,
-            df_feat_grid_dsm,
-            df_feat_grid_dem,
-            df_feat_grid_landuse
+            list_pred_calc_grid,
+            df_feat_grid_d_road
           ),
           .f = collapse::join,
           on = "gid"
+        ) %>%
+        dplyr::mutate(
+          dsm = unlist(df_feat_grid_dsm),
+          dem = unlist(df_feat_grid_dem)
+        ) %>%
+        dplyr::bind_cols(
+          df_feat_grid_landuse
         )
       },
       iteration = "list",
-      pattern = map(sf_grid_correct_set)
+      pattern =
+      map(
+        list_pred_calc_grid,
+        df_feat_grid_d_road,
+        df_feat_grid_dsm,
+        df_feat_grid_dem,
+        df_feat_grid_landuse
+      )
   )
 )
