@@ -989,13 +989,20 @@ fit_tidy_xgb <-
 
     mset <- yardstick::metric_set(
           yardstick::rmse, yardstick::mae)
+
+    topt <- finetune::control_race(
+      verbose = TRUE,
+      verbose_elim = TRUE,
+      save_pred = TRUE,
+      save_workflow = TRUE
+    )
     xgb_res <-
       xgb_wf |>
       finetune::tune_race_anova(
         resamples = vfold_cv(data, v = 5),
         grid = tuneset,
         metrics = mset,
-        control = control_race(verbose = TRUE, verbose_elim = TRUE)
+        control = topt
       )
 
     return(xgb_res)

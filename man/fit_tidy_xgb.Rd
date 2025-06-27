@@ -31,6 +31,7 @@ This function fits an XGBoost regression model using the tidymodels framework. I
 }
 \examples{
 \dontrun{
+data()
 fit_tidy_xgb(data = my_data, formula = y ~ ., invars = names(my_data)[-1])
 }
 }

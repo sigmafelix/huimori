@@ -88,29 +88,86 @@ list_tune_models <-
         crew = targets::tar_resources_crew(controller = "controller_08")
       )
     ),
+    # targets::tar_target(
+    #   name = workflow_tune_correct_full,
+    #   command = {
+    #     fit_tidy_xgb(
+    #       data = df_feat_correct_merged,
+    #       formula = form_fit,
+    #       invars = chr_terms_x
+    #     )
+    #   },
+    #   pattern = map(form_fit),
+    #   iteration = "list"
+    # ),
+    # targets::tar_target(
+    #   name = workflow_tune_incorrect_full,
+    #   command = {
+    #     fit_tidy_xgb(
+    #       data = df_feat_incorrect_merged,
+    #       formula = form_fit,
+    #       invars = chr_terms_x
+    #     )
+    #   },
+    #   pattern = map(form_fit),
+    #   iteration = "list"
+    # ),
     targets::tar_target(
-      name = workflow_tune_correct_full,
+      name = workflow_fit_correct,
       command = {
-        fit_tidy_xgb(
-          data = df_feat_correct_merged,
-          formula = form_fit,
-          invars = chr_terms_x
-        )
+        yvar <- tune::outcome_names(workflow_tune_correct_spatial)
+
+        df_combined <-
+          df_feat_grid_merged %>%
+          purrr::map(
+            .x = .,
+            .f = ~ sf::st_drop_geometry(dplyr::select(.x, all_of(chr_terms_x)))
+          ) %>%
+          purrr::reduce(
+            .x = .,
+            .f = dplyr::bind_rows
+          )
+        fitted <-
+          tune::fit_best(
+            workflow_tune_correct_spatial,
+            metric = "rmse"
+          ) %>%
+          predict(
+            .,
+            df_combined
+          )
+        names(fitted) <- yvar
+        fitted
       },
-      pattern = map(form_fit),
-      iteration = "list"
+      pattern = map(workflow_tune_correct_spatial)
     ),
     targets::tar_target(
-      name = workflow_tune_incorrect_full,
+      name = workflow_fit_incorrect,
       command = {
-        fit_tidy_xgb(
-          data = df_feat_incorrect_merged,
-          formula = form_fit,
-          invars = chr_terms_x
-        )
-      },
-      pattern = map(form_fit),
-      iteration = "list"
-    )
+        yvar <- tune::outcome_names(workflow_tune_incorrect_spatial)
 
+        df_combined <-
+          df_feat_grid_merged %>%
+          purrr::map(
+            .x = .,
+            .f = ~ sf::st_drop_geometry(dplyr::select(.x, all_of(chr_terms_x)))
+          ) %>%
+          purrr::reduce(
+            .x = .,
+            .f = dplyr::bind_rows
+          )
+        fitted <-
+          tune::fit_best(
+            workflow_tune_incorrect_spatial,
+            metric = "rmse"
+          ) %>%
+          predict(
+            .,
+            df_combined
+          )
+        names(fitted) <- yvar
+        fitted
+      },
+      pattern = map(workflow_tune_incorrect_spatial)
+    )
   )

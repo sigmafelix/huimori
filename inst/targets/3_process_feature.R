@@ -539,8 +539,8 @@ list_process_feature <-
     targets::tar_target(
       name = df_feat_grid_d_road,
       command = {
-        road <- sf::st_read(chr_road_files[[11]], quiet = TRUE)
-        road <- sf::st_transform(road, sf::st_crs(sf_grid_correct_set))
+        road <- sf::st_read(chr_road_files, quiet = TRUE)
+        road <- sf::st_transform(road, sf::st_crs(list_pred_calc_grid))
         nearest_idx <- sf::st_nearest_feature(
           x = list_pred_calc_grid,
           y = road
@@ -553,15 +553,19 @@ list_process_feature <-
             by_element = TRUE
           )
         sf_grid_dist_att <-
-          sf_grid_correct_set |>
+          list_pred_calc_grid |>
           dplyr::mutate(
             d_road = dist_road_nearest
-          )
+          ) |>
+          sf::st_drop_geometry()
         sf_grid_dist_att
 
       },
       iteration = "list",
-      pattern = map(list_pred_calc_grid)
+      pattern = map(list_pred_calc_grid),
+      resources = targets::tar_resources(
+        crew = targets::tar_resources_crew(controller = "controller_08")
+      )
     ),
     targets::tar_target(
       name = df_feat_grid_dsm,
@@ -596,7 +600,7 @@ list_process_feature <-
       )
     ),
     targets::tar_target(
-      name = df_feat_grid_landuse,
+      name = ras_landuse_freq,
       command = {
         landuse_ras <-
           terra::rast(chr_landuse_file, win = c(124, 132.5, 33, 38.6))
@@ -612,11 +616,24 @@ list_process_feature <-
               0, 0, 1, 1, 1, 0, 0),
             nrow = 7, ncol = 7, byrow = TRUE
           )
-        landuse_freq <-
-          huimori::rasterize_freq(
-            ras = landuse_ras,
-            mat = flt7
+          ras_res <-
+            huimori::rasterize_freq(
+              ras = landuse_ras,
+              mat = flt7
+            )
+          terra::writeRaster(
+            x = ras_res,
+            filename = file.path(chr_dir_data, "landuse_freq.tif"),
+            overwrite = TRUE
           )
+          TRUE
+      }
+    ),
+    targets::tar_target(
+      name = df_feat_grid_landuse,
+      command = {
+        landuse_freq <-
+          terra::rast(file.path(chr_dir_data, "landuse_freq.tif")) 
         chopin::extract_at(
           x = landuse_freq,
           y = list_pred_calc_grid,
@@ -625,27 +642,39 @@ list_process_feature <-
         )
       },
       iteration = "list",
-      pattern = map(list_pred_calc_grid)
+      pattern = map(list_pred_calc_grid),
+      resources = targets::tar_resources(
+        crew = targets::tar_resources_crew(controller = "controller_08")
+      )
     ),
     targets::tar_target(
       name = df_feat_grid_merged,
       command = {
-        purrr::reduce(
-          .x = 
-          list(
-            list_pred_calc_grid,
-            df_feat_grid_d_road
-          ),
-          .f = collapse::join,
-          on = "gid"
-        ) %>%
-        dplyr::mutate(
-          dsm = unlist(df_feat_grid_dsm),
-          dem = unlist(df_feat_grid_dem)
-        ) %>%
-        dplyr::bind_cols(
-          df_feat_grid_landuse
-        )
+       df_res <-
+          purrr::reduce(
+            .x =
+              list(
+                list_pred_calc_grid,
+                df_feat_grid_d_road
+              ),
+            .f = collapse::join,
+            on = c("gid")
+          ) %>%
+          dplyr::bind_cols(
+            df_feat_grid_landuse
+          ) %>%
+          dplyr::mutate(
+            dsm = unlist(df_feat_grid_dsm),
+            dem = unlist(df_feat_grid_dem),
+          ) %>%
+          dplyr::mutate(
+            d_road = as.numeric(d_road) / 1000,
+            dsm = as.numeric(dsm),
+            dem = as.numeric(dem)
+          ) %>%
+          sf::st_drop_geometry()
+        names(df_res) <- sub("mean.", "", names(df_res))
+        df_res
       },
       iteration = "list",
       pattern =
