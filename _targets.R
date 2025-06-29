@@ -18,6 +18,8 @@ controller_10 <-
   crew::crew_controller_local(name = "controller_10", workers = 10)
 controller_15 <-
   crew::crew_controller_local(name = "controller_15", workers = 15)
+controller_20 <-
+  crew::crew_controller_local(name = "controller_20", workers = 20)
 
 
 
@@ -36,7 +38,8 @@ targets::tar_option_set(
     controller_01,
     controller_08,
     controller_10,
-    controller_15
+    controller_15,
+    controller_20
   ),
   error = "continue",
   garbage_collection = 3,

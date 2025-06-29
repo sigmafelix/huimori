@@ -234,44 +234,60 @@ list_process_split <-
   list(
     targets::tar_target(
       name = int_grid_size,
-      command = c(100L),#, 100, 250, 500),
+      command = c(30L),#, 100, 250, 500),
       iteration = "list"
     ),
     targets::tar_target(
       name = int_size_split,
-      command = c(50L),#, 20L, 10L, 2L),
+      command = c(70L),#, 20L, 10L, 2L),
       iteration = "list"
     ),
     targets::tar_target(
       name = sf_grid_size,
       command = {
-        # sf_monitors_ext <-
-        #   sf::st_bbox(sf_monitors_correct) %>%
-        #   sf::st_as_sfc() %>%
-        #   sf::st_as_sf() %>%
-        #   sf::st_buffer(
-        #     endCapStyle = "SQUARE",
-        #     joinStyle = "MITRE",
-        #     dist = 5000
-        #   )
         korea_poly <- sf_korea_all |>
-          sf::st_buffer(1000) |>
-          sf::st_simplify(preserveTopology = TRUE, dTolerance = 100)
-        sf::st_make_grid(
-          korea_poly,
-          cellsize = int_grid_size,
-          what = "centers"
-        ) %>%
-        sf::st_as_sf() %>%
-        dplyr::mutate(gid = seq_len(dplyr::n())) %>%
-        dplyr::bind_cols(
-          dplyr::as_tibble(sf::st_coordinates(.))
-        ) %>%
-        sf::st_drop_geometry()
+          sf::st_simplify(preserveTopology = TRUE, dTolerance = 100) |>
+          terra::vect()
+
+        korea_grid <- auto_grid(
+          x = korea_poly,
+          grid_size = int_grid_size,
+          chunks = 40L
+        )
+        sf::st_as_sf(korea_grid)
       }
       ,
-      # iteration = "list",
-      pattern = map(int_grid_size)
+      pattern = map(int_grid_size),
+      iteration = "vector"
+    ),
+    targets::tar_target(
+      name = sf_grid_size_group,
+      command = {
+        sf_grid_size %>%
+          dplyr::group_by(CGRIDID) %>%
+          tar_group()
+      },
+      iteration = "group"
+    ),
+    targets::tar_target(
+      name = list_pred_calc_grid,
+      command = {
+        kor_ext <- floor(terra::ext(sf_grid_size_group))
+        ras_template <- terra::rast(kor_ext, resolution = int_grid_size)
+        ras_pad <- rasterize(sf_korea_all, ras_template)
+        vec_ras <- terra::as.data.frame(ras_pad, xy = TRUE)
+        vec_ras$gid <- seq_len(nrow(vec_ras))
+        sf::st_as_sf(
+          vec_ras,
+          coords = c("x", "y"),
+          crs = 5179,
+          remove = FALSE
+        )
+      },
+      pattern = cross(map(sf_grid_size_group), int_grid_size),
+      resources = targets::tar_resources(
+        crew = targets::tar_resources_crew(controller = "controller_20")
+      )
     ),
     targets::tar_target(
       name = sf_grid_correct_split,
@@ -293,7 +309,7 @@ list_process_split <-
       iteration = "list"
     ),
     targets::tar_target(
-      list_pred_calc_grid,
+      list_pred_calc_grid_old,
       command = {
         grid_unit <- sf::st_bbox(sf_grid_correct_split[int_split_grid_ids, ])
         sf::st_as_sf(
@@ -564,7 +580,7 @@ list_process_feature <-
       iteration = "list",
       pattern = map(list_pred_calc_grid),
       resources = targets::tar_resources(
-        crew = targets::tar_resources_crew(controller = "controller_08")
+        crew = targets::tar_resources_crew(controller = "controller_20")
       )
     ),
     targets::tar_target(
@@ -580,7 +596,7 @@ list_process_feature <-
       iteration = "list",
       pattern = map(list_pred_calc_grid),
       resources = targets::tar_resources(
-        crew = targets::tar_resources_crew(controller = "controller_08")
+        crew = targets::tar_resources_crew(controller = "controller_20")
       )
     ),
     targets::tar_target(
@@ -596,7 +612,7 @@ list_process_feature <-
       iteration = "list",
       pattern = map(list_pred_calc_grid),
       resources = targets::tar_resources(
-        crew = targets::tar_resources_crew(controller = "controller_08")
+        crew = targets::tar_resources_crew(controller = "controller_20")
       )
     ),
     targets::tar_target(
@@ -644,7 +660,7 @@ list_process_feature <-
       iteration = "list",
       pattern = map(list_pred_calc_grid),
       resources = targets::tar_resources(
-        crew = targets::tar_resources_crew(controller = "controller_08")
+        crew = targets::tar_resources_crew(controller = "controller_20")
       )
     ),
     targets::tar_target(

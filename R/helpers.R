@@ -105,3 +105,56 @@ summarize_annual <-
       dplyr::ungroup()
     return(data_annual)
   }
+
+
+
+#' Auto-generate a grid template with exactly
+#' splitted in full numbers
+#' @param x sf/terra object representing the polygon to be gridded
+#' @param grid_size numeric(1). Size of the grid cells in meters.
+#' @param chunks integer(1). Number of chunks to split the grid into.
+#' @return A SpatVector object with exactly split grids
+#' @export
+#' @importFrom terra ext
+#' @importFrom chopin par_pad_grid
+auto_grid <-
+  function(
+    x,
+    grid_size = 100,
+    chunks = 30L
+  ) {
+    if (!inherits(x, "SpatVector")) {
+      if (inherits(x, "sf")) {
+        x <- terra::vect(x)
+      } else {
+        stop("Input x must be a SpatVector or sf object.")
+      }
+    }
+    xext <- floor(terra::ext(x))
+    chunksize <- grid_size * chunks
+
+    rem_x <- chunksize - ((xext[2] - xext[1]) %% chunksize)
+    rem_y <- chunksize - ((xext[4] - xext[3]) %% chunksize)
+    rem_x_left <- ifelse(rem_x == 0, 0, -(grid_size * 10))
+    rem_y_bottom <- ifelse(rem_y == 0, 0, -(grid_size * 10))
+    rem_x_right <- ifelse(rem_x == 0, 0, rem_x + rem_x_left)
+    rem_y_top <- ifelse(rem_y == 0, 0, rem_y + rem_y_bottom)
+    xext <- c(
+      xext[1] + rem_x_left,
+      xext[2] + rem_x_right,
+      xext[3] + rem_y_bottom,
+      xext[4] + rem_y_top
+    )
+    xext <- terra::ext(xext)
+    xext <- terra::vect(xext, crs = terra::crs(x))
+    pad_res <-
+      chopin::par_pad_grid(
+        input = xext,
+        mode = "grid",
+        nx = chunks,
+        ny = chunks,
+        padding = 0
+      )$original
+    pad_res <- pad_res[x, ]
+    return(pad_res)
+  }
