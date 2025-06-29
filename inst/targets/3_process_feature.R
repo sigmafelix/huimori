@@ -555,7 +555,7 @@ list_process_feature <-
     targets::tar_target(
       name = df_feat_grid_d_road,
       command = {
-        road <- sf::st_read(chr_road_files, quiet = TRUE)
+        road <- sf::st_read(chr_road_files[length(chr_road_files)], quiet = TRUE)
         road <- sf::st_transform(road, sf::st_crs(list_pred_calc_grid))
         nearest_idx <- sf::st_nearest_feature(
           x = list_pred_calc_grid,
