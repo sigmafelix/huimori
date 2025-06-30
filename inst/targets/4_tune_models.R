@@ -139,7 +139,10 @@ list_tune_models <-
         names(fitted) <- yvar
         fitted
       },
-      pattern = map(workflow_tune_correct_spatial)
+      pattern = map(workflow_tune_correct_spatial),
+      resources = targets::tar_resources(
+        crew = targets::tar_resources_crew(controller = "controller_08")
+      )
     ),
     targets::tar_target(
       name = workflow_fit_incorrect,
@@ -168,6 +171,93 @@ list_tune_models <-
         names(fitted) <- yvar
         fitted
       },
-      pattern = map(workflow_tune_incorrect_spatial)
+      pattern = map(workflow_tune_incorrect_spatial),
+      resources = targets::tar_resources(
+        crew = targets::tar_resources_crew(controller = "controller_08")
+      )
+    )
+  )
+
+list_pred_process <-
+  list(
+    targets::tar_target(
+      df_diff_correct_incorrect,
+      command = {
+        data.frame(
+          diff = unlist(workflow_fit_correct) - unlist(workflow_fit_incorrect)
+        )
+      },
+      pattern = map(workflow_fit_correct, workflow_fit_incorrect),
+      iteration = "list",
+      resources = targets::tar_resources(
+        crew = targets::tar_resources_crew(controller = "controller_08")
+      )
+    ),
+    targets::tar_target(
+      name = chr_file_grid_250m,
+      command = file.path(chr_dir_data, "grid_250m.gpkg")
+    ),
+    targets::tar_target(
+      name = df_grid_250m,
+      command = {
+        sf::st_read(
+          dsn = chr_file_grid_250m,
+          quiet = TRUE
+        ) %>%
+          dplyr::select(
+            -gid
+          ) %>%
+          sf::st_coordinates() %>%
+          dplyr::as_tibble()
+      }
+    ),
+    targets::tar_target(
+      name = df_diff_correct_incorrect_coord,
+      command = {
+        df_diff_correct_incorrect %>%
+          dplyr::bind_cols(
+            df_grid_250m
+          )
+      },
+      pattern = map(df_diff_correct_incorrect),
+      resources = targets::tar_resources(
+        crew = targets::tar_resources_crew(controller = "controller_08")
+      )
+    ),
+    targets::tar_target(
+      name = sf_pred_correct_xgb_pm,
+      command = {
+        sf_pred_xgb_pm <-
+          sf::st_read(
+            dsn = chr_file_grid_250m,
+            quiet = TRUE
+          ) %>%
+          dplyr::select(
+            -gid
+          ) %>%
+          dplyr::bind_cols(
+            workflow_fit_correct
+          )
+        sf_pred_xgb_pm
+      },
+      pattern = map(workflow_fit_correct)
+    ),
+    targets::tar_target(
+      name = sf_pred_incorrect_xgb_pm,
+      command = {
+        sf_pred_xgb_pm <-
+          sf::st_read(
+            dsn = chr_file_grid_250m,
+            quiet = TRUE
+          ) %>%
+          dplyr::select(
+            -gid
+          ) %>%
+          dplyr::bind_cols(
+            workflow_fit_incorrect
+          )
+        sf_pred_xgb_pm
+      },
+      pattern = map(workflow_fit_incorrect)
     )
   )
