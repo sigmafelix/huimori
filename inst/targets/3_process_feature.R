@@ -414,6 +414,50 @@ list_process_feature <-
       }
     ),
     targets::tar_target(
+      name = df_feat_correct_mtpi,
+      command = {
+        mtpi_ras <- terra::rast(chr_mtpi_file)
+        chopin::extract_at(
+          x = mtpi_ras,
+          y = sf_monitors_correct,
+          radius = 1e-6,
+          force_df = TRUE
+        )
+      }
+    ),
+    targets::tar_target(
+      name = sf_feat_nemittors,
+      command = {
+        watersheds <-
+          sf::st_read(
+            dsn = chr_korea_watershed,
+            quiet = TRUE
+          )
+        emittors <-
+          sf::st_read(
+            dsn = chr_file_emission_locs,
+            quiet = TRUE
+          ) |>
+          sf::st_transform(5179) |>
+          sf::st_join(watersheds, join = sf::st_within)
+        emittors
+      }
+    ),
+    targets::tar_target(
+      name = df_feat_correct_emittors,
+      command = {
+        nemittors <- sf::st_join(
+          y = sf_feat_nemittors,
+          x = sf_monitors_correct,
+          join = sf::st_intersects
+        ) |>
+          dplyr::select(
+            TMSID, TMSID2, year, geometry, watershed_id
+          )
+        nemittors
+      }
+    ),
+    targets::tar_target(
       name = df_feat_correct_merged,
       command = {
         df_res <-
@@ -522,6 +566,31 @@ list_process_feature <-
       }
     ),
     targets::tar_target(
+      name = df_feat_incorrect_mtpi,
+      command = {
+        mtpi_ras <- terra::rast(chr_mtpi_file)
+        chopin::extract_at(
+          x = mtpi_ras,
+          y = sf_monitors_incorrect,
+          radius = 1e-6,
+          force_df = TRUE
+        )
+      }
+    ),
+    targets::tar_target(
+      name = df_feat_incorrect_emittors,
+      command = {
+        nemittors <- sf::st_join(
+          y = sf_feat_nemittors,
+          x = sf_monitors_incorrect,
+          join = sf::st_intersects
+        ) |>
+          dplyr::select(
+            TMSID, TMSID2, year, geometry, watershed_id
+          )
+        nemittors
+      }
+    ),    targets::tar_target(
       name = df_feat_incorrect_merged,
       command = {
         df_res <-
@@ -656,6 +725,41 @@ list_process_feature <-
           radius = 1e-6,
           force_df = TRUE
         )
+      },
+      iteration = "list",
+      pattern = map(list_pred_calc_grid),
+      resources = targets::tar_resources(
+        crew = targets::tar_resources_crew(controller = "controller_20")
+      )
+    ),
+    targets::tar_target(
+      name = df_feat_grid_mtpi,
+      command = {
+        mtpi_ras <- terra::rast(chr_mtpi_file)
+        chopin::extract_at(
+          x = mtpi_ras,
+          y = list_pred_calc_grid,
+          radius = 1e-6,
+          force_df = TRUE
+        )
+      },
+      iteration = "list",
+      pattern = map(list_pred_calc_grid),
+      resources = targets::tar_resources(
+        crew = targets::tar_resources_crew(controller = "controller_20")
+      )
+    ),
+    targets::tar_target(
+      name = df_feat_grid_emittors,
+      command = {
+        nemittors <-
+          sf::st_join(
+            y = sf_feat_nemittors,
+            x = list_pred_calc_grid,
+            join = sf::st_intersects
+          ) %>%
+          sf::st_drop_geometry()
+        nemittors
       },
       iteration = "list",
       pattern = map(list_pred_calc_grid),

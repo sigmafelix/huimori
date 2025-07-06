@@ -58,5 +58,19 @@ list_basefiles <-
         sf::st_as_sf() %>%
         sf::st_transform("EPSG:5179")
       }
+    ),
+    targets::tar_target(
+      name = chr_korea_watershed,
+      command = {
+        file.path(chr_dir_data, "watersheds", "data", "watershed-korea.gpkg")
+      }
+    ),
+    targets::tar_target(
+      name = chr_mtpi_file,
+      command = file.path(chr_dir_data, "elevation", "kngii_90m_mtpi.tif")
+    ),
+    targets::tar_target(
+      name = chr_file_emission_locs,
+      command = file.path(chr_dir_data, "emission", "data", "emission_location.gpkg")
     )
   )
