@@ -440,7 +440,17 @@ list_process_feature <-
           ) |>
           sf::st_transform(5179) |>
           sf::st_join(watersheds, join = sf::st_within)
-        emittors
+        nemittors <- emittors |>
+          sf::st_drop_geometry() |>
+          dplyr::select(SBSNCD) |>
+          dplyr::count(SBSNCD)
+        watersheds_n_emit <-
+          watersheds |>
+          dplyr::left_join(nemittors, by = "SBSNCD") |>
+          dplyr::transmute(
+            n_emittors_watershed = ifelse(is.na(n), 0, n)
+          )
+        watersheds_n_emit
       }
     ),
     targets::tar_target(
@@ -450,10 +460,10 @@ list_process_feature <-
           y = sf_feat_nemittors,
           x = sf_monitors_correct,
           join = sf::st_intersects
-        ) |>
-          dplyr::select(
-            TMSID, TMSID2, year, geometry, watershed_id
-          )
+        )# |>
+          # dplyr::select(
+          #   TMSID, TMSID2, year, geometry
+          # )
         nemittors
       }
     ),
