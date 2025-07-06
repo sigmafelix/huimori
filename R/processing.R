@@ -39,3 +39,50 @@ rasterize_freq <-
     names(rcountedw) <- sprintf("class_%02d", vec_cl)
     return(rcountedw)
   }
+
+
+#' Geographical smoothing of a raster
+#'
+#' Smoothing filter for a raster object. It may be useful
+#' for calculating relative altitude or other derivations
+#'
+#' @param x A `SpatRaster` object from the `terra` package.
+#'  The raster to smooth.
+#' @param mat A matrix defining the smoothing kernel.
+#' If `NULL`, a default kernel is used.
+#' @return A `SpatRaster` object with smoothed values.
+#' @details
+#' The function applies a focal operation to smooth the raster values
+#' using the specified kernel. If no kernel is provided, a default
+#' kernel is used.
+#'
+#' @examples
+#' library(terra)
+#' r <- rast(matrix(rnorm(100), 10, 10))
+#' mat <- matrix(1, 3, 3)
+#' smoothed_r <- detect_lower(r, mat)
+#'
+#' @importFrom terra focal
+#' @export
+lower_filter <-
+  function(x, mat = NULL, rad) {
+    matsize <- 2 * rad + 1
+    if (is.null(mat)) {
+      mat <- matrix(0, matsize, matsize)
+      for (i in c(1, matsize)) {
+        mat[i, ] <- 1
+        mat[, i] <- 1
+      }
+      mat[rad + 1, rad + 1] <- 1
+    }
+    denom <- 4 * (2 * rad + 1) - 4
+    islower <-
+      function(w) {
+        vec_idx <- rad * (2 * rad + 1) + rad
+        res <- sum(w[which(w != 0)] > w[vec_idx], na.rm = TRUE) / denom
+        return(res)
+      }
+    smoothed <- terra::focal(x = x, w = mat, fun = islower, expand = TRUE)
+    return(smoothed)
+  }
+
