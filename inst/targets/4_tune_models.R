@@ -6,7 +6,7 @@ list_fit_models <-
       name = chr_terms_x,
       command = {
         c(
-          "dsm", "dem", "d_road",
+          "dsm", "dem", "d_road", "mtpi", "n_emittors_watershed",
           sprintf("class_%02d", c(1,3,11,13,14,15,16,21,22,31,32))
         )
       }
@@ -56,11 +56,13 @@ list_tune_models <-
         yvar <- as.character(form_fit)[2]
         data_sub <- df_feat_correct_merged %>%
           dplyr::filter(year == int_years_spatial) %>%
-          .[!is.na(.[[yvar]]), ] # Filter out NA values for the outcome variable
+          .[!is.na(.[[yvar]]), ] %>% # Filter out NA values for the outcome variable
+          dplyr::mutate(site_type = droplevels(site_type))
         fit_tidy_xgb(
           data = data_sub,
           formula = form_fit,
-          invars = chr_terms_x
+          invars = chr_terms_x,
+          strata = "site_type"
         )
       },
       pattern = cross(int_years_spatial, form_fit),

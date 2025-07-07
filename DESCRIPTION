@@ -20,7 +20,8 @@ Imports:
     tsibble,
     fable,
     fabletools,
-    rlang
+    rlang,
+    spatialsample
 Suggests:
     geodata,
     janitor

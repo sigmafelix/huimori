@@ -4,7 +4,7 @@
 \alias{fit_tidy_xgb}
 \title{Fit a Tuned XGBoost Regression Model with Tidymodels}
 \usage{
-fit_tidy_xgb(data, formula, invars, nrounds = 1000)
+fit_tidy_xgb(data, formula, invars, strata = NULL, nrounds = 1000)
 }
 \arguments{
 \item{data}{A data frame containing the training data.}
@@ -12,6 +12,8 @@ fit_tidy_xgb(data, formula, invars, nrounds = 1000)
 \item{formula}{A formula specifying the model.}
 
 \item{invars}{A character vector of input variable names (not directly used in the function, but included for interface consistency).}
+
+\item{strata}{An optional character vector specifying the stratification variable for cross-validation. If \code{NULL}, no stratification is applied.}
 
 \item{nrounds}{Integer. Number of boosting rounds (trees) for XGBoost. Default is 1000.}
 }

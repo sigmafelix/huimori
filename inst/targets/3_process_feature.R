@@ -339,7 +339,7 @@ list_process_feature <-
     targets::tar_target(
       name = df_feat_correct_d_road,
       command = {
-        road <- sf::st_read(chr_road_files, quiet = TRUE)
+        road <- sf::st_read(chr_road_files[length(chr_road_files)], quiet = TRUE)
         road <- sf::st_transform(road, sf::st_crs(sf_monitors_correct))
         nearest_idx <- sf::st_nearest_feature(
           x = sf_monitors_correct,
@@ -485,14 +485,22 @@ list_process_feature <-
           ) %>%
           dplyr::mutate(
             dsm = unlist(df_feat_correct_dsm),
-            dem = unlist(df_feat_correct_dem)
+            dem = unlist(df_feat_correct_dem),
+            n_emittors_watershed = unlist(df_feat_correct_emittors$n_emittors_watershed),
+            mtpi = unlist(df_feat_correct_mtpi)
           ) %>%
-          sf::st_drop_geometry() %>%
           dplyr::mutate(
             d_road = as.numeric(d_road) / 1000,
             dsm = as.numeric(dsm),
-            dem = as.numeric(dem)
-          )
+            dem = as.numeric(dem),
+            mtpi = as.numeric(mtpi),
+            n_emittors_watershed =
+              ifelse(
+                is.na(n_emittors_watershed), 0,
+                as.numeric(n_emittors_watershed)
+              )
+          ) %>%
+          sf::st_drop_geometry()
         names(df_res) <- sub("mean.", "", names(df_res))
         df_res
       }
@@ -728,7 +736,7 @@ list_process_feature <-
       name = df_feat_grid_landuse,
       command = {
         landuse_freq <-
-          terra::rast(file.path(chr_dir_data, "landuse_freq.tif")) 
+          terra::rast(file.path(chr_dir_data, "landuse_freq.tif"))
         chopin::extract_at(
           x = landuse_freq,
           y = list_pred_calc_grid,
@@ -796,11 +804,15 @@ list_process_feature <-
           dplyr::mutate(
             dsm = unlist(df_feat_grid_dsm),
             dem = unlist(df_feat_grid_dem),
+            n_emittors_watershed = unlist(df_feat_grid_emittors$n_emittors_watershed),
+            mtpi = unlist(df_feat_grid_mtpi)
           ) %>%
           dplyr::mutate(
             d_road = as.numeric(d_road) / 1000,
             dsm = as.numeric(dsm),
-            dem = as.numeric(dem)
+            dem = as.numeric(dem),
+            mtpi = as.numeric(mtpi),
+            n_emittors_watershed = as.numeric(n_emittors_watershed)
           ) %>%
           sf::st_drop_geometry()
         names(df_res) <- sub("mean.", "", names(df_res))
@@ -813,7 +825,9 @@ list_process_feature <-
         df_feat_grid_d_road,
         df_feat_grid_dsm,
         df_feat_grid_dem,
-        df_feat_grid_landuse
+        df_feat_grid_landuse,
+        df_feat_grid_mtpi,
+        df_feat_grid_emittors
       )
   )
 )

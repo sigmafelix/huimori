@@ -930,6 +930,7 @@ pred_tmb <-
 #' @param data A data frame containing the training data.
 #' @param formula A formula specifying the model.
 #' @param invars A character vector of input variable names (not directly used in the function, but included for interface consistency).
+#' @param strata An optional character vector specifying the stratification variable for cross-validation. If `NULL`, no stratification is applied.
 #' @param nrounds Integer. Number of boosting rounds (trees) for XGBoost. Default is 1000.
 #'
 #' @return A `tune_race_anova` object containing the tuning results.
@@ -947,7 +948,8 @@ pred_tmb <-
 #' @importFrom hardhat extract_parameter_set_dials
 #' @importFrom yardstick rmse rsq metric_set
 #' @importFrom workflows workflow add_recipe add_model
-#' @importFrom rsample vfold_cv
+#' @importFrom rsample vfold_cv group_vfold_cv
+#' @importFrom spatialsample spatial_block_cv
 #'
 #' @examples
 #' \dontrun{
@@ -956,7 +958,7 @@ pred_tmb <-
 #' }
 #' @export
 fit_tidy_xgb <-
-  function(data, formula, invars, nrounds = 1000) {
+  function(data, formula, invars, strata = NULL, nrounds = 1000) {
     xgb_spec <-
       boost_tree(
         mode = "regression",
@@ -996,10 +998,21 @@ fit_tidy_xgb <-
       save_pred = TRUE,
       save_workflow = TRUE
     )
+
+    if (is.null(strata)) {
+      stratified <- rsample::vfold_cv(data = data, v = 5)
+    }
+    if (is.character(strata)) {
+      stratified <- rsample::group_vfold_cv(data = data, group = strata, v = NULL)
+    }
+    if (strata == "spatial") {
+      stratified <- spatialsample::spatial_block_cv(data = data, method = "snake", v = 5)
+    }
+
     xgb_res <-
       xgb_wf |>
       finetune::tune_race_anova(
-        resamples = vfold_cv(data, v = 5),
+        resamples = stratified,
         grid = tuneset,
         metrics = mset,
         control = topt
