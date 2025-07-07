@@ -958,7 +958,8 @@ pred_tmb <-
 #' }
 #' @export
 fit_tidy_xgb <-
-  function(data, formula, invars, strata = NULL, nrounds = 1000) {
+  function(data, formula, invars, strata = NULL, nrounds = 1000, device = c("cpu", "cuda")) {
+    device <- match.arg(device)
     xgb_spec <-
       boost_tree(
         mode = "regression",
@@ -967,7 +968,7 @@ fit_tidy_xgb <-
         tree_depth = tune(),
         learn_rate = tune()
       ) |>
-      set_engine("xgboost")
+      set_engine("xgboost", device = device)
 
     xgb_rec <-
       recipe(formula, data = data) |>
@@ -1010,13 +1011,27 @@ fit_tidy_xgb <-
     }
 
     xgb_res <-
-      xgb_wf |>
-      finetune::tune_race_anova(
-        resamples = stratified,
-        grid = tuneset,
-        metrics = mset,
-        control = topt
-      )
+      tryCatch({
+        xgb_wf |>
+          finetune::tune_race_anova(
+            resamples = stratified,
+            grid = tuneset,
+            metrics = mset,
+            control = topt
+          )
+      }, error = function(e) {
+        stratified <- rsample::vfold_cv(data = data, v = 5)
+        wf_tune <-
+          xgb_wf |>
+          finetune::tune_race_anova(
+            resamples = stratified,
+            grid = tuneset,
+            metrics = mset,
+            control = topt
+          )
+        attr(wf_tune, "error") <- e
+        wf_tune
+      })
 
     return(xgb_res)
   }

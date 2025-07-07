@@ -341,6 +341,8 @@ list_process_feature <-
       command = {
         road <- sf::st_read(chr_road_files[length(chr_road_files)], quiet = TRUE)
         road <- sf::st_transform(road, sf::st_crs(sf_monitors_correct))
+        road <- road %>%
+          dplyr::filter(!ROAD_TYPE %in% c("002", "004") & ROAD_USE == 0)
         nearest_idx <- sf::st_nearest_feature(
           x = sf_monitors_correct,
           y = road
@@ -439,16 +441,35 @@ list_process_feature <-
             quiet = TRUE
           ) |>
           sf::st_transform(5179) |>
+          dplyr::filter(
+            영업상태구분코드 ==  "01"
+          ) |>
+          dplyr::mutate(
+            class_weight = as.integer(sub("종", "", 종별명)),
+            class_weight = dplyr::case_when(
+              class_weight == 1 ~ 80,
+              class_weight == 2 ~ 20,
+              class_weight == 3 ~ 10,
+              class_weight == 4 ~ 2,
+              class_weight == 5 ~ 0.25,
+              TRUE ~ 0
+            )
+          ) |>
           sf::st_join(watersheds, join = sf::st_within)
         nemittors <- emittors |>
           sf::st_drop_geometry() |>
-          dplyr::select(SBSNCD) |>
-          dplyr::count(SBSNCD)
+          dplyr::select(SBSNCD, class_weight) |>
+          dplyr::group_by(SBSNCD) |>
+          dplyr::summarize(
+            n_emittors_watershed = sum(class_weight, na.rm = TRUE)
+          ) |>
+          dplyr::ungroup()
         watersheds_n_emit <-
           watersheds |>
           dplyr::left_join(nemittors, by = "SBSNCD") |>
           dplyr::transmute(
-            n_emittors_watershed = ifelse(is.na(n), 0, n)
+            # n_emittors_watershed = ifelse(is.na(n), 0, n)
+            n_emittors_watershed = ifelse(is.na(n_emittors_watershed), 0, n_emittors_watershed)
           )
         watersheds_n_emit
       }
@@ -511,6 +532,8 @@ list_process_feature <-
       command = {
         road <- sf::st_read(chr_road_files, quiet = TRUE)
         road <- sf::st_transform(road, sf::st_crs(sf_monitors_incorrect))
+        road <- road %>%
+          dplyr::filter(!ROAD_TYPE %in% c("002", "004") & ROAD_USE == 0)
         nearest_idx <- sf::st_nearest_feature(
           x = sf_monitors_incorrect,
           y = road
@@ -644,6 +667,8 @@ list_process_feature <-
       command = {
         road <- sf::st_read(chr_road_files[length(chr_road_files)], quiet = TRUE)
         road <- sf::st_transform(road, sf::st_crs(list_pred_calc_grid))
+        road <- road %>%
+          dplyr::filter(!ROAD_TYPE %in% c("002", "004") & ROAD_USE == 0)
         nearest_idx <- sf::st_nearest_feature(
           x = list_pred_calc_grid,
           y = road

@@ -1,6 +1,6 @@
 Package: huimori
 Title: Hybrid Urban-rural Integrated Modeling with Open Reproducible Infrastructure in Korea
-Version: 0.0.6.9000
+Version: 0.0.7.9000
 Authors@R: 
     person("Insang", "Song", , "geoissong@snu.ac.kr", role = c("aut", "cre"))
 Description: Reproducible pipeline for hybrid urban-rural integrated modeling in Korea.
