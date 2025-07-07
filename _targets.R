@@ -32,7 +32,7 @@ targets::tar_option_set(
       "data.table", "tibble", "tune", "yardstick", "workflows",
       "recipes", "dials",
       "chopin", "mirai", "parsnip", "finetune", "huimori", "nanoparquet",
-      "readxl"),
+      "readxl", "bonsai", "lightgbm", "xgboost", "crew"),
   format = "qs", # Optionally set the default storage format. qs is fast.
   controller = crew::crew_controller_group(
     controller_01,

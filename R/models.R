@@ -1020,3 +1020,103 @@ fit_tidy_xgb <-
 
     return(xgb_res)
   }
+
+
+
+#' Fit a Tuned LightGBM Regression Model with Tidymodels
+#'
+#' This function fits an LightGBM regression model using the tidymodels framework. It performs PCA on predictors starting with "class_", normalizes all predictors, and tunes hyperparameters (`min_n`, `tree_depth`, `learn_rate`) using a space-filling grid and ANOVA racing. The function returns the tuning results.
+#'
+#' @param data A data frame containing the training data.
+#' @param formula A formula specifying the model.
+#' @param invars A character vector of input variable names (not directly used in the function, but included for interface consistency).
+#' @param strata An optional character vector specifying the stratification variable for cross-validation. If `NULL`, no stratification is applied.
+#' @param nrounds Integer. Number of boosting rounds (trees) for XGBoost. Default is 1000.
+#'
+#' @return A `tune_race_anova` object containing the tuning results.
+#'
+#' @details
+#' - Applies PCA to predictors starting with "class_" (5 components).
+#' - Normalizes all predictors.
+#' - Tunes `min_n`, `tree_depth`, and `learn_rate` over a space-filling grid (size 50).
+#' - Uses 5-fold cross-validation and evaluates RMSE and R-squared.
+#'
+#' @import tidymodels
+#' @import finetune
+#' @importFrom recipes step_pca step_normalize
+#' @importFrom dials min_n tree_depth learn_rate grid_space_filling
+#' @importFrom hardhat extract_parameter_set_dials
+#' @importFrom yardstick rmse rsq metric_set
+#' @importFrom workflows workflow add_recipe add_model
+#' @importFrom rsample vfold_cv group_vfold_cv
+#' @importFrom spatialsample spatial_block_cv
+#'
+#' @examples
+#' \dontrun{
+#' data()
+#' fit_tidy_lgb(data = my_data, formula = y ~ ., invars = names(my_data)[-1])
+#' }
+#' @export
+fit_tidy_lgb <-
+  function(data, formula, invars, strata = NULL, nrounds = 1000) {
+    lgb_spec <-
+      boost_tree(
+        mode = "regression",
+        trees = nrounds,
+        min_n = tune(),
+        tree_depth = tune(),
+        learn_rate = tune()
+      ) |>
+      set_engine("lightgbm")
+
+    lgb_rec <-
+      recipe(formula, data = data) |>
+      recipes::step_zv(all_predictors()) |>
+      # step_pca(starts_with("class_"), num_comp = 3) |>
+      step_normalize(all_predictors())
+
+    lgb_wf <-
+      workflow() |>
+      add_recipe(lgb_rec) |>
+      add_model(lgb_spec)
+
+    tuneset <-
+      hardhat::extract_parameter_set_dials(lgb_wf) |>
+      dials::grid_space_filling(
+        min_n(c(3, 10)),
+        tree_depth(c(3, 10)),
+        learn_rate(range = c(-4, -1), trans = transform_log10()),
+        size = 50
+      )
+
+    mset <- yardstick::metric_set(
+          yardstick::rmse, yardstick::mae)
+
+    topt <- finetune::control_race(
+      verbose = TRUE,
+      verbose_elim = TRUE,
+      save_pred = TRUE,
+      save_workflow = TRUE
+    )
+
+    if (is.null(strata)) {
+      stratified <- rsample::vfold_cv(data = data, v = 5)
+    }
+    if (is.character(strata)) {
+      stratified <- rsample::group_vfold_cv(data = data, group = strata, v = NULL)
+    }
+    if (strata == "spatial") {
+      stratified <- spatialsample::spatial_block_cv(data = data, method = "snake", v = 5)
+    }
+
+    lgb_res <-
+      lgb_wf |>
+      finetune::tune_race_anova(
+        resamples = stratified,
+        grid = tuneset,
+        metrics = mset,
+        control = topt
+      )
+
+    return(lgb_res)
+  }
