@@ -58,12 +58,15 @@ list_tune_models <-
           dplyr::filter(year == int_years_spatial) %>%
           .[!is.na(.[[yvar]]), ] %>% # Filter out NA values for the outcome variable
           dplyr::mutate(site_type = droplevels(site_type))
-        fit_tidy_xgb(
-          data = data_sub,
-          formula = form_fit,
-          invars = chr_terms_x,
-          strata = "site_type"
-        )
+        res <-
+          fit_tidy_xgb(
+            data = data_sub,
+            formula = form_fit,
+            invars = chr_terms_x,
+            strata = "site_type"
+          )
+        attr(res, "year") <- int_years_spatial
+        res
       },
       pattern = cross(int_years_spatial, form_fit),
       iteration = "list",
@@ -121,14 +124,23 @@ list_tune_models <-
 
         df_combined <-
           df_feat_grid_merged %>%
-          purrr::map(
-            .x = .,
-            .f = ~ sf::st_drop_geometry(dplyr::select(.x, all_of(chr_terms_x)))
+          sf::st_drop_geometry() %>%
+          dplyr::mutate(
+            n_emittors_watershed = ifelse(
+              is.na(n_emittors_watershed),
+              0,
+              n_emittors_watershed
+            )
           ) %>%
-          purrr::reduce(
-            .x = .,
-            .f = dplyr::bind_rows
-          )
+          dplyr::filter(!is.na(class_03))
+          # purrr::map(
+          #   .x = .,
+          #   .f = ~ sf::st_drop_geometry(dplyr::select(.x, all_of(chr_terms_x)))
+          # ) %>%
+          # purrr::reduce(
+          #   .x = .,
+          #   .f = dplyr::bind_rows
+          # )
         fitted <-
           tune::fit_best(
             workflow_tune_correct_spatial,
@@ -138,10 +150,13 @@ list_tune_models <-
             .,
             df_combined
           )
-        names(fitted) <- yvar
+        fitted <-
+          dplyr::bind_cols(fitted, df_combined[, c(4, 1, 2)]) %>%
+          dplyr::mutate(year = attr(workflow_tune_correct_spatial, "year"))
+        names(fitted)[1] <- yvar
         fitted
       },
-      pattern = map(workflow_tune_correct_spatial),
+      pattern = cross(workflow_tune_correct_spatial, df_feat_grid_merged),
       resources = targets::tar_resources(
         crew = targets::tar_resources_crew(controller = "controller_08")
       )
