@@ -74,31 +74,6 @@ list_tune_models <-
         crew = targets::tar_resources_crew(controller = "controller_08")
       )
     ),
-    ### LGB
-    targets::tar_target(
-      name = workflow_tune_correct_lgbspatial,
-      command = {
-        yvar <- as.character(form_fit)[2]
-        data_sub <- df_feat_correct_merged %>%
-          dplyr::filter(year == int_years_spatial) %>%
-          .[!is.na(.[[yvar]]), ] %>% # Filter out NA values for the outcome variable
-          dplyr::mutate(site_type = droplevels(site_type))
-        res <-
-          fit_tidy_lgb(
-            data = data_sub,
-            formula = form_fit,
-            invars = chr_terms_x,
-            strata = "site_type"
-          )
-        attr(res, "year") <- int_years_spatial
-        res
-      },
-      pattern = cross(int_years_spatial, form_fit),
-      iteration = "list",
-      resources = targets::tar_resources(
-        crew = targets::tar_resources_crew(controller = "controller_08")
-      )
-    ),
     targets::tar_target(
       name = workflow_tune_incorrect_spatial,
       command = {
