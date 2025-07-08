@@ -932,7 +932,7 @@ pred_tmb <-
 #' @param invars A character vector of input variable names (not directly used in the function, but included for interface consistency).
 #' @param strata An optional character vector specifying the stratification variable for cross-validation. If `NULL`, no stratification is applied.
 #' @param nrounds Integer. Number of boosting rounds (trees) for XGBoost. Default is 1000.
-#'
+#' @param device Character. Device to use for XGBoost training, either "cpu" or "cuda". Default is "cpu".
 #' @return A `tune_race_anova` object containing the tuning results.
 #'
 #' @details
@@ -940,7 +940,8 @@ pred_tmb <-
 #' - Normalizes all predictors.
 #' - Tunes `min_n`, `tree_depth`, and `learn_rate` over a space-filling grid (size 50).
 #' - Uses 5-fold cross-validation and evaluates RMSE and R-squared.
-#'
+#' @note
+#' `xgboost` > 3.0.0 is strongly recommended.
 #' @import tidymodels
 #' @import finetune
 #' @importFrom recipes step_pca step_normalize
@@ -984,7 +985,7 @@ fit_tidy_xgb <-
     tuneset <-
       hardhat::extract_parameter_set_dials(xgb_wf) |>
       dials::grid_space_filling(
-        min_n(c(3, 10)),
+        min_n(c(3, 31)),
         tree_depth(c(3, 10)),
         learn_rate(range = c(-4, -1), trans = transform_log10()),
         size = 50

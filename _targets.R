@@ -12,6 +12,8 @@ sf::sf_use_s2(FALSE) # Disable S2 geometry library for sf package.
 # set controllers
 controller_01 <-
   crew::crew_controller_local(name = "controller_01", workers = 1)
+controller_04 <-
+  crew::crew_controller_local(name = "controller_04", workers = 4)
 controller_08 <-
   crew::crew_controller_local(name = "controller_08", workers = 8)
 controller_10 <-
@@ -36,6 +38,7 @@ targets::tar_option_set(
   format = "qs", # Optionally set the default storage format. qs is fast.
   controller = crew::crew_controller_group(
     controller_01,
+    controller_04,
     controller_08,
     controller_10,
     controller_15,

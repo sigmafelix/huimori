@@ -63,7 +63,8 @@ list_tune_models <-
             data = data_sub,
             formula = form_fit,
             invars = chr_terms_x,
-            strata = "site_type"
+            strata = "site_type",
+            device = "cpu"
           )
         attr(res, "year") <- int_years_spatial
         res
@@ -71,7 +72,7 @@ list_tune_models <-
       pattern = cross(int_years_spatial, form_fit),
       iteration = "list",
       resources = targets::tar_resources(
-        crew = targets::tar_resources_crew(controller = "controller_08")
+        crew = targets::tar_resources_crew(controller = "controller_04")
       )
     ),
     targets::tar_target(

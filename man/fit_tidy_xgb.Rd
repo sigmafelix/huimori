@@ -4,7 +4,14 @@
 \alias{fit_tidy_xgb}
 \title{Fit a Tuned XGBoost Regression Model with Tidymodels}
 \usage{
-fit_tidy_xgb(data, formula, invars, strata = NULL, nrounds = 1000)
+fit_tidy_xgb(
+  data,
+  formula,
+  invars,
+  strata = NULL,
+  nrounds = 1000,
+  device = c("cpu", "cuda")
+)
 }
 \arguments{
 \item{data}{A data frame containing the training data.}
@@ -16,6 +23,8 @@ fit_tidy_xgb(data, formula, invars, strata = NULL, nrounds = 1000)
 \item{strata}{An optional character vector specifying the stratification variable for cross-validation. If \code{NULL}, no stratification is applied.}
 
 \item{nrounds}{Integer. Number of boosting rounds (trees) for XGBoost. Default is 1000.}
+
+\item{device}{Character. Device to use for XGBoost training, either "cpu" or "cuda". Default is "cpu".}
 }
 \value{
 A \code{tune_race_anova} object containing the tuning results.
@@ -30,6 +39,9 @@ This function fits an XGBoost regression model using the tidymodels framework. I
 \item Tunes \code{min_n}, \code{tree_depth}, and \code{learn_rate} over a space-filling grid (size 50).
 \item Uses 5-fold cross-validation and evaluates RMSE and R-squared.
 }
+}
+\note{
+\code{xgboost} > 3.0.0 is strongly recommended.
 }
 \examples{
 \dontrun{
