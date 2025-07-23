@@ -83,7 +83,7 @@ chr_asos_file <-
 
 RPostgres::dbWriteTable(
   conn = mycon,
-  name = c("public", "asos_2010_2023"),
+  name = Id(schema = "public", table = "asos_2010_2023"),
   value = nanoparquet::read_parquet(chr_asos_file),
   overwrite = TRUE
 )
