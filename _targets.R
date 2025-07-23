@@ -47,7 +47,9 @@ targets::tar_option_set(
   error = "continue",
   garbage_collection = 3,
   memory = "transient",
-  deployment = "worker"
+  deployment = "worker",
+  storage = "worker",
+  retrieval = "worker"
 )
 
 # Run the R scripts in the R/ folder with your custom functions:
