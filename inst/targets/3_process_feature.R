@@ -226,6 +226,37 @@ list_process_site <-
     targets::tar_target(
       name = dt_asos,
       command = nanoparquet::read_parquet(chr_asos_file)
+    ),
+    targets::tar_target(
+      name = ras_landuse_freq,
+      command = {
+        # the last file should be fixed when years are branched
+        landuse_ras <-
+          terra::rast(chr_landuse_files[length(chr_landuse_files)], win = c(124, 132.5, 33, 38.6))
+
+        flt7 <-
+          matrix(
+            c(0, 0, 1, 1, 1, 0, 0,
+              0, 1, 1, 1, 1, 1, 0,
+              1, 1, 1, 1, 1, 1, 1,
+              1, 1, 1, 1, 1, 1, 1,
+              1, 1, 1, 1, 1, 1, 1,
+              0, 1, 1, 1, 1, 1, 0,
+              0, 0, 1, 1, 1, 0, 0),
+            nrow = 7, ncol = 7, byrow = TRUE
+          )
+          ras_res <-
+            huimori::rasterize_freq(
+              ras = landuse_ras,
+              mat = flt7
+            )
+          terra::writeRaster(
+            x = ras_res,
+            filename = file.path(chr_dir_data, "landuse_freq_glc_fcs30d_2022.tif"),
+            overwrite = TRUE
+          )
+          TRUE
+      }
     )
   )
 
@@ -386,27 +417,29 @@ list_process_feature <-
     targets::tar_target(
       name = df_feat_correct_landuse,
       command = {
-        landuse_ras <-
-          terra::rast(
-            chr_landuse_file,
-            win = c(124, 132.5, 33, 38.6)
-          )
-        flt7 <-
-          matrix(
-            c(0, 0, 1, 1, 1, 0, 0,
-              0, 1, 1, 1, 1, 1, 0,
-              1, 1, 1, 1, 1, 1, 1,
-              1, 1, 1, 1, 1, 1, 1,
-              1, 1, 1, 1, 1, 1, 1,
-              0, 1, 1, 1, 1, 1, 0,
-              0, 0, 1, 1, 1, 0, 0),
-            nrow = 7, ncol = 7, byrow = TRUE
-          )
+        # landuse_ras <-
+        #   terra::rast(
+        #     chr_landuse_files,
+        #     win = c(124, 132.5, 33, 38.6)
+        #   )
+        # flt7 <-
+        #   matrix(
+        #     c(0, 0, 1, 1, 1, 0, 0,
+        #       0, 1, 1, 1, 1, 1, 0,
+        #       1, 1, 1, 1, 1, 1, 1,
+        #       1, 1, 1, 1, 1, 1, 1,
+        #       1, 1, 1, 1, 1, 1, 1,
+        #       0, 1, 1, 1, 1, 1, 0,
+        #       0, 0, 1, 1, 1, 0, 0),
+        #     nrow = 7, ncol = 7, byrow = TRUE
+        #   )
         landuse_freq <-
-          huimori::rasterize_freq(
-            ras = landuse_ras,
-            mat = flt7
-          )
+          terra::rast(file.path(chr_dir_data, "landuse_freq_glc_fcs30d_2022.tif"))
+        # landuse_freq <-
+        #   huimori::rasterize_freq(
+        #     ras = landuse_ras,
+        #     mat = flt7
+        #   )
         chopin::extract_at(
           x = landuse_freq,
           y = sf_monitors_correct,
@@ -577,27 +610,29 @@ list_process_feature <-
     targets::tar_target(
       name = df_feat_incorrect_landuse,
       command = {
-        landuse_ras <-
-          terra::rast(
-            chr_landuse_file,
-            win = c(124, 132.5, 33, 38.6)
-          )
-        flt7 <-
-          matrix(
-            c(0, 0, 1, 1, 1, 0, 0,
-              0, 1, 1, 1, 1, 1, 0,
-              1, 1, 1, 1, 1, 1, 1,
-              1, 1, 1, 1, 1, 1, 1,
-              1, 1, 1, 1, 1, 1, 1,
-              0, 1, 1, 1, 1, 1, 0,
-              0, 0, 1, 1, 1, 0, 0),
-            nrow = 7, ncol = 7, byrow = TRUE
-          )
+        # landuse_ras <-
+        #   terra::rast(
+        #     chr_landuse_file,
+        #     win = c(124, 132.5, 33, 38.6)
+        #   )
+        # flt7 <-
+        #   matrix(
+        #     c(0, 0, 1, 1, 1, 0, 0,
+        #       0, 1, 1, 1, 1, 1, 0,
+        #       1, 1, 1, 1, 1, 1, 1,
+        #       1, 1, 1, 1, 1, 1, 1,
+        #       1, 1, 1, 1, 1, 1, 1,
+        #       0, 1, 1, 1, 1, 1, 0,
+        #       0, 0, 1, 1, 1, 0, 0),
+        #     nrow = 7, ncol = 7, byrow = TRUE
+        #   )
+        # landuse_freq <-
+        #   huimori::rasterize_freq(
+        #     ras = landuse_ras,
+        #     mat = flt7
+        #   )
         landuse_freq <-
-          huimori::rasterize_freq(
-            ras = landuse_ras,
-            mat = flt7
-          )
+          terra::rast(file.path(chr_dir_data, "landuse_freq_glc_fcs30d_2022.tif"))
         chopin::extract_at(
           x = landuse_freq,
           y = sf_monitors_incorrect,
@@ -728,40 +763,10 @@ list_process_feature <-
       )
     ),
     targets::tar_target(
-      name = ras_landuse_freq,
-      command = {
-        landuse_ras <-
-          terra::rast(chr_landuse_file, win = c(124, 132.5, 33, 38.6))
-
-        flt7 <-
-          matrix(
-            c(0, 0, 1, 1, 1, 0, 0,
-              0, 1, 1, 1, 1, 1, 0,
-              1, 1, 1, 1, 1, 1, 1,
-              1, 1, 1, 1, 1, 1, 1,
-              1, 1, 1, 1, 1, 1, 1,
-              0, 1, 1, 1, 1, 1, 0,
-              0, 0, 1, 1, 1, 0, 0),
-            nrow = 7, ncol = 7, byrow = TRUE
-          )
-          ras_res <-
-            huimori::rasterize_freq(
-              ras = landuse_ras,
-              mat = flt7
-            )
-          terra::writeRaster(
-            x = ras_res,
-            filename = file.path(chr_dir_data, "landuse_freq.tif"),
-            overwrite = TRUE
-          )
-          TRUE
-      }
-    ),
-    targets::tar_target(
       name = df_feat_grid_landuse,
       command = {
         landuse_freq <-
-          terra::rast(file.path(chr_dir_data, "landuse_freq.tif"))
+          terra::rast(file.path(chr_dir_data, "landuse_freq_glc_fcs30d_2022.tif"))
         chopin::extract_at(
           x = landuse_freq,
           y = list_pred_calc_grid,

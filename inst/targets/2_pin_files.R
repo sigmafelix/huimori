@@ -14,11 +14,11 @@ list_basefiles <-
       command = file.path(chr_measurement_dir, "sites_airkorea_2010_2023_spt_yd.parquet"),
       format = "file"
     ),
-    targets::tar_target(
-      name = chr_landuse_file,
-      command = file.path(chr_dir_data, "landcover", "lc_mcd12q1v061.p1_c_500m_s_20210101_20211231_go_epsg.4326_v20230818.tif"),
-      format = "file"
-    ),
+    # targets::tar_target(
+    #   name = chr_landuse_file,
+    #   command = file.path(chr_dir_data, "landcover", "lc_mcd12q1v061.p1_c_500m_s_20210101_20211231_go_epsg.4326_v20230818.tif"),
+    #   format = "file"
+    # ),
     targets::tar_target(
       name = chr_dem_file,
       command = file.path(chr_dir_data, "elevation", "kngii_2022_merged_res30d.tif"),
@@ -72,5 +72,15 @@ list_basefiles <-
     targets::tar_target(
       name = chr_file_emission_locs,
       command = file.path(chr_dir_data, "emission", "data", "emission_location.gpkg")
+    ),
+    targets::tar_target(
+      name = chr_landuse_files,
+      command = {
+        list.files(
+          file.path(chr_dir_data, "landuse", "glc_fcs30d"),
+          pattern = ".tif$",
+          full.names = TRUE
+        )
+      }
     )
   )
