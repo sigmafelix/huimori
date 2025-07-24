@@ -1,69 +1,8 @@
 ## FCS Landcover (30m) Legend
 
-    <style>
-        body {
-            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
-            margin: 20px;
-            background-color: #f8f9fa;
-        }
-        .container {
-            max-width: 1000px;
-            margin: 0 auto;
-            background: white;
-            padding: 20px;
-            border-radius: 8px;
-            box-shadow: 0 2px 10px rgba(0,0,0,0.1);
-        }
-        h1 {
-            color: #333;
-            text-align: center;
-            margin-bottom: 30px;
-        }
-        table {
-            width: 100%;
-            border-collapse: collapse;
-            margin: 20px 0;
-        }
-        th {
-            background-color: #f1f3f4;
-            color: #333;
-            font-weight: 600;
-            padding: 12px;
-            border: 1px solid #ddd;
-            text-align: left;
-        }
-        td {
-            padding: 10px 12px;
-            border: 1px solid #ddd;
-            vertical-align: middle;
-        }
-        .quantity {
-            font-weight: 600;
-            text-align: center;
-            width: 80px;
-        }
-        .color-cell {
-            width: 100px;
-            text-align: center;
-            font-family: 'Courier New', monospace;
-            font-size: 12px;
-            font-weight: bold;
-            color: white;
-            text-shadow: 1px 1px 1px rgba(0,0,0,0.7);
-        }
-        .label {
-            font-size: 14px;
-        }
-        tr:hover {
-            background-color: #f8f9fa;
-        }
-        .light-text {
-            color: black !important;
-            text-shadow: 1px 1px 1px rgba(255,255,255,0.8);
-        }
-    </style>
-</head>
-<body>
+### Source
+- [OpenLandMap](https://stac.openlandmap.org/lc_glc.fcs30d/collection.json?.language=en)
+
     <div class="container">
         <h1>Land Cover Classification Color Map</h1>
         <table>
