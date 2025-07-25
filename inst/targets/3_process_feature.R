@@ -433,17 +433,19 @@ list_process_feature <-
         #       0, 0, 1, 1, 1, 0, 0),
         #     nrow = 7, ncol = 7, byrow = TRUE
         #   )
-        landuse_freq <-
-          terra::rast(file.path(chr_dir_data, "landuse_freq_glc_fcs30d_2022.tif"))
+        landuse_ras <-
+          terra::rast(chr_landuse_files[length(chr_landuse_files)])
+
         # landuse_freq <-
         #   huimori::rasterize_freq(
         #     ras = landuse_ras,
         #     mat = flt7
         #   )
         chopin::extract_at(
-          x = landuse_freq,
+          x = landuse_ras,
           y = sf_monitors_correct,
-          radius = 1e-6,
+          radius = 100,
+          func = "frac",
           force_df = TRUE
         )
       }
@@ -765,12 +767,16 @@ list_process_feature <-
     targets::tar_target(
       name = df_feat_grid_landuse,
       command = {
-        landuse_freq <-
-          terra::rast(file.path(chr_dir_data, "landuse_freq_glc_fcs30d_2022.tif"))
+        landuse_ras <-
+          terra::rast(chr_landuse_files[length(chr_landuse_files)], win = c(124, 132.5, 33, 38.6))
+
+        # landuse_freq <-
+        #   terra::rast(file.path(chr_dir_data, "landuse_freq_glc_fcs30d_2022.tif"))
         chopin::extract_at(
-          x = landuse_freq,
+          x = landuse_ras,
           y = list_pred_calc_grid,
-          radius = 1e-6,
+          radius = 100,
+          func = "frac",
           force_df = TRUE
         )
       },
