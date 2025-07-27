@@ -767,18 +767,61 @@ list_process_feature <-
     targets::tar_target(
       name = df_feat_grid_landuse,
       command = {
-        landuse_ras <-
-          terra::rast(chr_landuse_files[length(chr_landuse_files)], win = c(124, 132.5, 33, 38.6))
+        init_list <- list()
+        # another implementation: memory-minded
+        list_10k_split <-
+          list_pred_calc_grid |>
+          nrow() |>
+          seq_len()
+        list_10k_split <-
+          ceiling(list_10k_split / 5e4)
+        for (i in seq_len(max(list_10k_split))) {
+          list_pred_calc_grid_i <-
+            list_pred_calc_grid[list_10k_split == i, ]
+          if (nrow(list_pred_calc_grid_i) == 0) {
+            next
+          }
 
-        # landuse_freq <-
-        #   terra::rast(file.path(chr_dir_data, "landuse_freq_glc_fcs30d_2022.tif"))
-        chopin::extract_at(
-          x = landuse_ras,
-          y = list_pred_calc_grid,
-          radius = 100,
-          func = "frac",
-          force_df = TRUE
-        )
+          crs_ras <- "EPSG:4326"
+          crs_vec <- "EPSG:5179"
+          ext_reproj <-
+            terra::project(
+              terra::ext(list_pred_calc_grid_i) + 1000,
+              crs_vec, crs_ras
+            )
+
+          landuse_ras <-
+            terra::rast(
+              chr_landuse_files[length(chr_landuse_files)],
+              win = ext_reproj
+            )
+          extracted_i <-
+            chopin::extract_at(
+              x = landuse_ras,
+              y = list_pred_calc_grid_i,
+              radius = 100,
+              func = "frac",
+              force_df = TRUE
+            )
+          init_list[[i]] <- extracted_i
+          rm(extracted_i)
+        }
+
+        collapse::rowbind(init_list, fill = TRUE)
+
+        # old implementation
+        # landuse_ras <-
+        #   terra::rast(chr_landuse_files[length(chr_landuse_files)], win = c(124, 132.5, 33, 38.6))
+
+        # # landuse_freq <-
+        # #   terra::rast(file.path(chr_dir_data, "landuse_freq_glc_fcs30d_2022.tif"))
+        # chopin::extract_at(
+        #   x = landuse_ras,
+        #   y = list_pred_calc_grid,
+        #   radius = 100,
+        #   func = "frac",
+        #   force_df = TRUE
+        # )
       },
       iteration = "list",
       pattern = map(list_pred_calc_grid),
