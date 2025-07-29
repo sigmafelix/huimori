@@ -7,7 +7,13 @@ list_fit_models <-
       command = {
         c(
           "dsm", "dem", "d_road", "mtpi", "n_emittors_watershed",
-          sprintf("class_%02d", c(1,3,11,13,14,15,16,21,22,31,32))
+          sprintf(
+            "frac_%d",
+            c(10, 11, 20, 51, 52, 61, 62, 71, 72,
+              82, 91, 130, 150, 181, 182, 183, 186, 187,
+              190, 200, 210
+            )
+          )
         )
       }
     )
@@ -132,8 +138,20 @@ list_tune_models <-
               0,
               n_emittors_watershed
             )
-          ) %>%
-          dplyr::filter(!is.na(class_03))
+          )
+        nonexistent_terms <-
+          setdiff(
+            chr_terms_x,
+            names(df_combined)
+          )
+        nonexistent_terms <- grep("^frac_", nonexistent_terms, value = TRUE)
+        if (length(nonexistent_terms) > 0) {
+          for (term in nonexistent_terms) {
+            df_combined[[term]] <- 0
+          }
+        }
+
+          #dplyr::filter(!is.na(class_03))
           # purrr::map(
           #   .x = .,
           #   .f = ~ sf::st_drop_geometry(dplyr::select(.x, all_of(chr_terms_x)))
