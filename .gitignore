@@ -3,3 +3,4 @@
 **/meta
 _targets/meta/meta
 container/*.sif
+.vscode
