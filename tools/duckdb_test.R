@@ -107,9 +107,7 @@ print(time_summary)
 
 dbDisconnect(con_time, shutdown = TRUE)
 
-# Yes, you can directly write the result of a DuckDB query to a Parquet file using the COPY statement.
-# Example: Save a filtered subset of the vector_data table to a new Parquet file
-
+# Export filtered data from DuckDB to Parquet
 con_export <- dbConnect(duckdb::duckdb(), dbdir = "summary.duckdb")
 
 dbExecute(

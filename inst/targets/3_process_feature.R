@@ -463,6 +463,18 @@ list_process_feature <-
       }
     ),
     targets::tar_target(
+      name = df_feat_correct_mtpi_1km,
+      command = {
+        mtpi_ras <- terra::rast(chr_mtpi_1km_file)
+        chopin::extract_at(
+          x = mtpi_ras,
+          y = sf_monitors_correct,
+          radius = 1e-6,
+          force_df = TRUE
+        )
+      }
+    ),
+    targets::tar_target(
       name = sf_feat_nemittors,
       command = {
         watersheds <-
@@ -543,7 +555,8 @@ list_process_feature <-
             dsm = unlist(df_feat_correct_dsm),
             dem = unlist(df_feat_correct_dem),
             n_emittors_watershed = unlist(df_feat_correct_emittors$n_emittors_watershed),
-            mtpi = unlist(df_feat_correct_mtpi)
+            mtpi = unlist(df_feat_correct_mtpi),
+            mtpi_1km = unlist(df_feat_correct_mtpi_1km)
           ) %>%
           dplyr::mutate(
             d_road = as.numeric(d_road) / 1000,
@@ -656,6 +669,18 @@ list_process_feature <-
       }
     ),
     targets::tar_target(
+      name = df_feat_incorrect_mtpi_1km,
+      command = {
+        mtpi_ras <- terra::rast(chr_mtpi_1km_file)
+        chopin::extract_at(
+          x = mtpi_ras,
+          y = sf_monitors_incorrect,
+          radius = 1e-6,
+          force_df = TRUE
+        )
+      }
+    ),
+    targets::tar_target(
       name = df_feat_incorrect_emittors,
       command = {
         nemittors <- sf::st_join(
@@ -691,7 +716,10 @@ list_process_feature <-
           dplyr::mutate(
             d_road = as.numeric(d_road) / 1000,
             dsm = as.numeric(dsm),
-            dem = as.numeric(dem)
+            dem = as.numeric(dem),
+            n_emittors_watershed = unlist(df_feat_correct_emittors$n_emittors_watershed),
+            mtpi = unlist(df_feat_incorrect_mtpi),
+            mtpi_1km = unlist(df_feat_incorrect_mtpi_1km)
           ) %>%
           sf::st_drop_geometry()
         names(df_res) <- sub("mean.", "", names(df_res))
@@ -833,6 +861,23 @@ list_process_feature <-
       name = df_feat_grid_mtpi,
       command = {
         mtpi_ras <- terra::rast(chr_mtpi_file)
+        chopin::extract_at(
+          x = mtpi_ras,
+          y = list_pred_calc_grid,
+          radius = 1e-6,
+          force_df = TRUE
+        )
+      },
+      iteration = "list",
+      pattern = map(list_pred_calc_grid),
+      resources = targets::tar_resources(
+        crew = targets::tar_resources_crew(controller = "controller_20")
+      )
+    ),
+    targets::tar_target(
+      name = df_feat_grid_mtpi_1km,
+      command = {
+        mtpi_ras <- terra::rast(chr_mtpi_1km_file)
         chopin::extract_at(
           x = mtpi_ras,
           y = list_pred_calc_grid,

@@ -70,6 +70,17 @@ list_basefiles <-
       command = file.path(chr_dir_data, "elevation", "kngii_90m_mtpi.tif")
     ),
     targets::tar_target(
+      name = chr_mtpi_1km_file,
+      command = {
+        mtpi <- terra::rast(chr_mtpi_file)
+        mtpi_1km <- terra::aggregate(mtpi, fact = 11, fun = mean, na.rm = TRUE)
+        out_file <- file.path(chr_dir_data, "elevation", "kngii_1km_mtpi.tif")
+        terra::writeRaster(mtpi_1km, out_file, overwrite = TRUE)
+        out_file
+      },
+      format = "file"
+    ),
+    targets::tar_target(
       name = chr_file_emission_locs,
       command = file.path(chr_dir_data, "emission", "data", "emission_location.gpkg")
     ),
