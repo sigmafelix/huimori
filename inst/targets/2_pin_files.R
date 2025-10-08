@@ -14,11 +14,14 @@ list_basefiles <-
       command = file.path(chr_measurement_dir, "sites_airkorea_2010_2023_spt_yd.parquet"),
       format = "file"
     ),
-    # targets::tar_target(
-    #   name = chr_landuse_file,
-    #   command = file.path(chr_dir_data, "landcover", "lc_mcd12q1v061.p1_c_500m_s_20210101_20211231_go_epsg.4326_v20230818.tif"),
-    #   format = "file"
-    # ),
+    targets::tar_target(
+      name = chr_landuse_file,
+      command = {
+        glc_dir <- file.path(chr_dir_data, "landuse", "glc_fcs30d")
+        list.files(glc_dir, pattern = "tif$", full.names = TRUE)
+      },
+      iteration = "list"
+    ),
     targets::tar_target(
       name = chr_dem_file,
       command = file.path(chr_dir_data, "elevation", "kngii_2022_merged_res30d.tif"),
@@ -79,6 +82,32 @@ list_basefiles <-
         out_file
       },
       format = "file"
+    ),
+    targets::tar_target(
+      name = chr_landuse_freq_file,
+      command = {
+        # 1km mask
+        year <- stringi::stri_extract_first_regex(
+          chr_landuse_file, pattern = "20[0-2][0-9]"
+        )
+        year <- as.integer(year)
+        flt_mask <- make_binary_mask(67, 67)
+        landuse_ras <- terra::rast(chr_landuse_file)
+        landuse_freq <-
+          huimori::rasterize_freq(
+            ras = landuse_ras,
+            mat = flt_mask
+          )
+        year_file_name <- sprintf("landuse_freq_glc_fcs30d_%d.tif", year)
+        out_file <- file.path(chr_dir_data, "landuse", year_file_name)
+        out_file
+      },
+      format = "file",
+      iteration = "list",
+      pattern = map(chr_landuse_file),
+      resources = targets::tar_resources(
+        crew = targets::tar_resources_crew(controller = "controller_01")
+      )
     ),
     targets::tar_target(
       name = chr_file_emission_locs,

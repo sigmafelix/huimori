@@ -630,31 +630,17 @@ list_process_feature <-
         #     chr_landuse_file,
         #     win = c(124, 132.5, 33, 38.6)
         #   )
-        # flt7 <-
-        #   matrix(
-        #     c(0, 0, 1, 1, 1, 0, 0,
-        #       0, 1, 1, 1, 1, 1, 0,
-        #       1, 1, 1, 1, 1, 1, 1,
-        #       1, 1, 1, 1, 1, 1, 1,
-        #       1, 1, 1, 1, 1, 1, 1,
-        #       0, 1, 1, 1, 1, 1, 0,
-        #       0, 0, 1, 1, 1, 0, 0),
-        #     nrow = 7, ncol = 7, byrow = TRUE
-        #   )
-        # landuse_freq <-
-        #   huimori::rasterize_freq(
-        #     ras = landuse_ras,
-        #     mat = flt7
-        #   )
+
         landuse_freq <-
-          terra::rast(file.path(chr_dir_data, "landuse_freq_glc_fcs30d_2022.tif"))
+          terra::rast(file.path(chr_dir_data, "landuse", chr_landuse_freq_file))
         chopin::extract_at(
           x = landuse_freq,
           y = sf_monitors_incorrect,
           radius = 1e-6,
           force_df = TRUE
         )
-      }
+      },
+      pattern = map(chr_landuse_freq_file)
     ),
     targets::tar_target(
       name = df_feat_incorrect_mtpi,

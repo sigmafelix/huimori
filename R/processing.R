@@ -29,16 +29,54 @@
 rasterize_freq <-
   function(ras, mat = NULL) {
     vec_cl <- sort(unique(terra::values(ras)))
-    mask <- Map(function(x) ras * (ras == x), vec_cl)
-    counted <- Map(function(x) {
-      terra::focal(x = x, w = mat, fun = \(k) sum(k != 0))
-    }, mask)
-
-    rcounted <- Reduce(c, counted)
-    rcountedw <- rcounted / sum(mat)
-    names(rcountedw) <- sprintf("class_%02d", vec_cl)
-    return(rcountedw)
+    out_list <- vector("list", length(vec_cl))
+    for (i in seq_along(vec_cl)) {
+      cl <- vec_cl[i]
+      mask <- ras == cl
+      # focal returns NA for NA window, so mask is logical (0/1)
+      counted <- terra::focal(x = mask, w = mat, fun = sum, na.rm = TRUE)
+      out_list[[i]] <- counted / sum(mat)
+    }
+    out_stack <- do.call(c, out_list)
+    names(out_stack) <- sprintf("class_%02d", vec_cl)
+    return(out_stack)
   }
+
+
+#' Make a circular binary mask
+#' @param nrow Number of rows in the mask
+#' @param ncol Number of columns in the mask
+#' @return A binary matrix with a circular pattern
+#' @details The function creates a binary matrix of size `nrow` x `ncol`
+#' with a circular pattern of 1s in the center and 0s elsewhere.
+#' The circle is defined such that it fits within the matrix dimensions.
+#' @export
+make_binary_mask <-
+  function(nrow, ncol) {
+    if (!all(c(nrow, ncol) %% 2 == 1)) {
+      stop("Both nrow and ncol must be odd numbers.")
+    }
+    mat <- matrix(0, nrow = nrow, ncol = ncol)
+    center_row <- ceiling(nrow / 2)
+    center_col <- ceiling(ncol / 2)
+    radius <- min(center_row, center_col) - 1
+    for (i in 1:nrow) {
+      for (j in 1:ncol) {
+        # Use Euclidean distance for a circular mask
+        if (sqrt((i - center_row)^2 + (j - center_col)^2) <= radius) {
+          mat[i, j] <- 1
+        }
+      }
+    }
+    xcent <- ceiling(ncol / 2)
+    ycent <- ceiling(nrow / 2)
+    mat[xcent - 1, 1] <- mat[1, ycent - 1] <-
+      mat[xcent - 1, ncol] <- mat[nrow, ycent - 1] <-
+      mat[xcent + 1, 1] <- mat[1, ycent + 1] <-
+      mat[xcent + 1, ncol] <- mat[nrow, ycent + 1] <- 1
+    mat
+  }
+
 
 
 #' Geographical smoothing of a raster
