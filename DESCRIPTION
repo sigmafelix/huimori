@@ -25,7 +25,8 @@ Imports:
     bonsai,
     xgboost,
     lightgbm,
-    spatialsample
+    spatialsample,
+    Rcpp
 Suggests:
     geodata,
     janitor,

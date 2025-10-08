@@ -94,12 +94,17 @@ list_basefiles <-
         flt_mask <- make_binary_mask(67, 67)
         landuse_ras <- terra::rast(chr_landuse_file)
         landuse_freq <-
-          huimori::rasterize_freq(
+          huimori::rasterize_freq_whitebox(
             ras = landuse_ras,
-            mat = flt_mask
+            window_size = 67
           )
+          # huimori::rasterize_freq(
+          #   ras = landuse_ras,
+          #   mat = flt_mask
+          # )
         year_file_name <- sprintf("landuse_freq_glc_fcs30d_%d.tif", year)
         out_file <- file.path(chr_dir_data, "landuse", year_file_name)
+        terra::writeRaster(landuse_freq, out_file, overwrite = TRUE)
         out_file
       },
       format = "file",
