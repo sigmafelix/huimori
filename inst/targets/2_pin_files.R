@@ -92,7 +92,7 @@ list_basefiles <-
         )
         year <- as.integer(year)
         year_file_name <- sprintf("glc_freq_%d.tif", year)
-        file.path(chr_dir_data, "landuse", "glc_fcs30d", year_file_name)
+        file.path(chr_dir_data, "landuse", year_file_name)
       },
       iteration = "list",
       pattern = map(chr_landuse_file),
