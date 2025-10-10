@@ -451,6 +451,47 @@ list_process_feature <-
       }
     ),
     targets::tar_target(
+      name = df_feat_correct_landuse,
+      command = {
+        # landuse_ras <-
+        #   terra::rast(
+        #     chr_landuse_files,
+        #     win = c(124, 132.5, 33, 38.6)
+        #   )
+        # flt7 <-
+        #   matrix(
+        #     c(0, 0, 1, 1, 1, 0, 0,
+        #       0, 1, 1, 1, 1, 1, 0,
+        #       1, 1, 1, 1, 1, 1, 1,
+        #       1, 1, 1, 1, 1, 1, 1,
+        #       1, 1, 1, 1, 1, 1, 1,
+        #       0, 1, 1, 1, 1, 1, 0,
+        #       0, 0, 1, 1, 1, 0, 0),
+        #     nrow = 7, ncol = 7, byrow = TRUE
+        #   )
+        landuse_ras <-
+          terra::rast(chr_landuse_freq_file)
+
+        # landuse_freq <-
+        #   huimori::rasterize_freq(
+        #     ras = landuse_ras,
+        #     mat = flt7
+        #   )
+        chopin::extract_at(
+          x = landuse_ras,
+          y = sf_monitors_correct,
+          radius = 100,
+          func = "frac",
+          force_df = TRUE
+        )
+      },
+      pattern = map(chr_landuse_freq_file),
+      iteration = "list",
+      resources = targets::tar_resources(
+        crew = targets::tar_resources_crew(controller = "controller_10")
+      )
+    ),
+    targets::tar_target(
       name = df_feat_correct_mtpi,
       command = {
         mtpi_ras <- terra::rast(chr_mtpi_file)
@@ -640,7 +681,11 @@ list_process_feature <-
           force_df = TRUE
         )
       },
-      pattern = map(chr_landuse_freq_file)
+      pattern = map(chr_landuse_freq_file),
+      iteration = "list",
+      resources = targets::tar_resources(
+        crew = targets::tar_resources_crew(controller = "controller_10")
+      )
     ),
     targets::tar_target(
       name = df_feat_incorrect_mtpi,
@@ -806,7 +851,7 @@ list_process_feature <-
 
           landuse_ras <-
             terra::rast(
-              chr_landuse_files[length(chr_landuse_files)],
+              chr_landuse_freq_file,
               win = ext_reproj
             )
           extracted_i <-
@@ -838,7 +883,7 @@ list_process_feature <-
         # )
       },
       iteration = "list",
-      pattern = map(list_pred_calc_grid),
+      pattern = map(list_pred_calc_grid, chr_landuse_freq_file),
       resources = targets::tar_resources(
         crew = targets::tar_resources_crew(controller = "controller_20")
       )
