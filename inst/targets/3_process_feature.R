@@ -452,7 +452,7 @@ list_process_feature <-
       pattern = map(chr_landuse_freq_file),
       iteration = "list",
       resources = targets::tar_resources(
-        crew = targets::tar_resources_crew(controller = "controller_10")
+        crew = targets::tar_resources_crew(controller = "controller_20")
       )
     ),
     targets::tar_target(
@@ -637,7 +637,7 @@ list_process_feature <-
         #   )
 
         landuse_freq <-
-          terra::rast(file.path(chr_dir_data, "landuse", chr_landuse_freq_file))
+          terra::rast(chr_landuse_freq_file)
         chopin::extract_at(
           x = landuse_freq,
           y = sf_monitors_incorrect,
@@ -648,7 +648,7 @@ list_process_feature <-
       pattern = map(chr_landuse_freq_file),
       iteration = "list",
       resources = targets::tar_resources(
-        crew = targets::tar_resources_crew(controller = "controller_10")
+        crew = targets::tar_resources_crew(controller = "controller_20")
       )
     ),
     targets::tar_target(

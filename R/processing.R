@@ -235,3 +235,146 @@ lower_filter <-
     return(smoothed)
   }
 
+
+#' Geographically weighted emittors with a spatial extent
+#' 
+#' This function takes three mandatory inputs: input points,
+#' emittor points, and a spatial polygon to delimit the emittors
+#' inside of it. From each input point, all the emittor points
+#' are firstly subsetted by the spatial polygon, and the clipped
+#' emittors are spatially weighted depending on the Euclidean or
+#' geodesic distance from the focal point with optional arguments
+#' for the weighting function (default: Gaussian; with options for
+#' exponential, tricube, epanechnikov) and optional weights to add
+#' more weights for the emission factor with respect to each emittor's
+#' classification.
+#'
+#' @param input sf
+#' @param target sf
+#' @param clip sf st_POLYGON
+#' @param wfun character
+#' @param bw numeric
+#' @param weight numeric
+#' @param dist_method character
+#' @return A data.frame with weighted emissions for each input point
+#' @importFrom sf st_intersection st_transform st_is_longlat st_distance
+#' @importFrom dplyr mutate select
+#' @importFrom stats dnorm
+#' @importFrom purrr list_rbind map
+#' @examples
+#' library(sf)
+#' library(dplyr)
+#'
+#' # Example input points (monitoring stations)
+#' input <- st_as_sf(data.frame(
+#'   id = 1:3,
+#'   lon = c(126.9780, 127.0010, 126.9900),
+#'   lat = c(37.5665, 37.5700, 37.5800)
+#' ), coords = c("lon", "lat"), crs = 4326) %>%
+#'   st_transform(5179)
+#'
+#' # Example target points (emittor locations with emissions)
+#' target <- st_as_sf(data.frame(
+#'   id = 1:5,
+#'   lon = c(126.9800, 127.0020, 126.9950, 127.0100, 126.9850),
+#'   lat = c(37.5650, 37.5680, 37.5750, 37.5720, 37.5780),
+#'   emission = c(100, 150, 200, 250, 300)
+#' ), coords = c("lon", "lat"), crs = 4326) %>%
+#'   st_transform(5179) %>%
+#'   mutate(emission = emission)
+#'
+#' # Example clipping polygon (a simple square around the input points)
+#' clip <- st_as_sf(data.frame(
+#'   id = 1,
+#'   geometry = st_sfc(st_polygon(list(rbind(
+#'     c(126.9750, 37.5600),
+#'     c(127.0150, 37.5600),
+#'     c(127.0150, 37.5850),
+#'     c(126.9750, 37.5850),
+#'     c(126.9750, 37.5600)
+#'   ))))
+#' ), crs = 4326) %>%
+#'   st_transform(5179)
+#'
+#' # Calculate geographically weighted emissions
+#' result <- purrr::map(seq_len(nrow(input)), \(x) gw_emittors(
+#'   input = input[x, ],
+#'   target = target,
+#'   clip = clip,
+#'   wfun = "gaussian",
+#'   bw = 1000,
+#'   dist_method = "geodesic"
+#' )) |>
+#' purrr::list_rbind()
+#' print(result)
+#' @export
+gw_emittors <-
+  function(input, target, clip,
+           wfun = c("gaussian", "exponential", "tricube", "epanechnikov"),
+           bw = 1000, weight = NULL,
+           dist_method = c("euclidean", "geodesic")) {
+    wfun <- match.arg(wfun)
+    dist_method <- match.arg(dist_method)
+    if (is.null(weight)) {
+      weight <- rep(1, nrow(target))
+    }
+    if (any(is.na(weight))) {
+      stop("weight contains NA values.")
+    }
+    if (any(weight < 0)) {
+      stop("weight contains negative values.")
+    }
+    if (!all(sf::st_is_longlat(input) == sf::st_is_longlat(target))) {
+      stop("input and target must have the same coordinate reference system.")
+    }
+    if (!all(sf::st_is_longlat(input) == sf::st_is_longlat(clip))) {
+      stop("input and clip must have the same coordinate reference system.")
+    }
+    if (!all(sf::st_is_longlat(target) == sf::st_is_longlat(clip))) {
+      stop("target and clip must have the same coordinate reference system.")
+    }
+    if (sf::st_is_longlat(input)) {
+      input <- sf::st_transform(input, 5179)
+    }
+    if (sf::st_is_longlat(target)) {
+      target <- sf::st_transform(target, 5179)
+    }
+    if (sf::st_is_longlat(clip)) {
+      clip <- sf::st_transform(clip, 5179)
+    }
+    sf::st_agr(input) <- "constant"
+    sf::st_agr(target) <- "constant"
+    sf::st_agr(clip) <- "constant"
+    gw_emission <- NA_real_
+    clip_pt <- sf::st_intersection(clip, input)
+    if (nrow(clip_pt) > 0) {
+      target_clip <- target[clip, ]
+      if (nrow(target_clip) > 0) {
+        dists <- sf::st_distance(input, target_clip, by_element = FALSE)
+        if (dist_method == "geodesic" && sf::st_is_longlat(input)) {
+          dists <- dists
+        } else {
+          dists <- as.numeric(dists)
+        }
+        if (!all(dists > bw)) {
+          if (wfun == "gaussian") {
+            w <- dnorm(dists / bw)
+          } else if (wfun == "exponential") {
+            w <- exp(-dists / bw)
+          } else if (wfun == "tricube") {
+            w <- (1 - (dists / bw)^3)^3
+            w[dists > bw] <- 0
+          } else if (wfun == "epanechnikov") {
+            w <- 0.75 * (1 - (dists / bw)^2)
+            w[dists > bw] <- 0
+          }
+          w <- w * weight[as.integer(rownames(target_clip))]
+          if (sum(w) != 0) {
+            gw_emission <- sum(target_clip$emission * w) / sum(w)
+          }
+        }
+      }
+    }
+    input$gw_emission <- gw_emission
+    return(sf::st_drop_geometry(input))
+  }
