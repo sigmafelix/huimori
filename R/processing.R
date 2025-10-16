@@ -345,32 +345,40 @@ gw_emittors <-
     sf::st_agr(input) <- "constant"
     sf::st_agr(target) <- "constant"
     sf::st_agr(clip) <- "constant"
-    gw_emission <- NA_real_
-    clip_pt <- sf::st_intersection(clip, input)
-    if (nrow(clip_pt) > 0) {
+
+    # Prepare output
+    gw_emission <- rep(NA_real_, nrow(input))
+
+    # Intersect input with clip
+    input_in_clip <- sf::st_intersection(input, clip)
+    idx_in_clip <- as.integer(rownames(input_in_clip))
+
+    if (length(idx_in_clip) > 0) {
+      # Subset target by clip
       target_clip <- target[clip, ]
       if (nrow(target_clip) > 0) {
-        dists <- sf::st_distance(input, target_clip, by_element = FALSE)
-        if (dist_method == "geodesic" && sf::st_is_longlat(input)) {
-          dists <- dists
-        } else {
-          dists <- as.numeric(dists)
-        }
-        if (!all(dists > bw)) {
-          if (wfun == "gaussian") {
-            w <- dnorm(dists / bw)
-          } else if (wfun == "exponential") {
-            w <- exp(-dists / bw)
-          } else if (wfun == "tricube") {
-            w <- (1 - (dists / bw)^3)^3
-            w[dists > bw] <- 0
-          } else if (wfun == "epanechnikov") {
-            w <- 0.75 * (1 - (dists / bw)^2)
-            w[dists > bw] <- 0
-          }
-          w <- w * weight[as.integer(rownames(target_clip))]
-          if (sum(w) != 0) {
-            gw_emission <- sum(target_clip$emission * w) / sum(w)
+        # Compute distances between all input points and all target points
+        dists <- sf::st_distance(input[idx_in_clip, ], target_clip)
+        dists <- as.matrix(dists)
+        # For each input point
+        for (i in seq_along(idx_in_clip)) {
+          dist_vec <- as.numeric(dists[i, ])
+          if (!all(dist_vec > bw)) {
+            if (wfun == "gaussian") {
+              w <- dnorm(dist_vec / bw)
+            } else if (wfun == "exponential") {
+              w <- exp(-dist_vec / bw)
+            } else if (wfun == "tricube") {
+              w <- (1 - (dist_vec / bw)^3)^3
+              w[dist_vec > bw] <- 0
+            } else if (wfun == "epanechnikov") {
+              w <- 0.75 * (1 - (dist_vec / bw)^2)
+              w[dist_vec > bw] <- 0
+            }
+            w <- w * weight[as.integer(rownames(target_clip))]
+            if (sum(w) != 0) {
+              gw_emission[idx_in_clip[i]] <- sum(target_clip$emission * w) / sum(w)
+            }
           }
         }
       }

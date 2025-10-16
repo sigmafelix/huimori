@@ -480,6 +480,23 @@ list_process_feature <-
       }
     ),
     targets::tar_target(
+      name = sf_emission_locs,
+      command = {
+        sf::st_read(chr_file_emission_locs, quiet = TRUE) |>
+          sf::st_transform(5179) |>
+          dplyr::filter(
+            영업상태구분코드 ==  "01"
+          )
+      }
+    ),
+    targets::tar_target(
+      name = sf_korea_watershed,
+      command = {
+        sf::st_read(chr_korea_watershed, quiet = TRUE) |>
+          sf::st_transform(5179)
+      }
+    ),
+    targets::tar_target(
       name = sf_feat_nemittors,
       command = {
         watersheds <-
@@ -529,15 +546,15 @@ list_process_feature <-
     targets::tar_target(
       name = df_feat_correct_emittors,
       command = {
-        nemittors <- sf::st_join(
-          y = sf_feat_nemittors,
-          x = sf_monitors_correct,
-          join = sf::st_intersects
-        )# |>
-          # dplyr::select(
-          #   TMSID, TMSID2, year, geometry
-          # )
-        nemittors
+        result <- gw_emittors(
+          input = sf_monitors_correct,
+          target = sf_emission_locs,
+          clip = sf_korea_watershed,
+          wfun = "gaussian",
+          bw = 5000,
+          dist_method = "geodesic"
+        )
+        result
       }
     ),
     targets::tar_target(
@@ -678,17 +695,18 @@ list_process_feature <-
     targets::tar_target(
       name = df_feat_incorrect_emittors,
       command = {
-        nemittors <- sf::st_join(
-          y = sf_feat_nemittors,
-          x = sf_monitors_incorrect,
-          join = sf::st_intersects
-        ) |>
-          dplyr::select(
-            TMSID, TMSID2, year, geometry, watershed_id
+        result <- gw_emittors(
+            input = sf_monitors_incorrect,
+            target = sf_emission_locs,
+            clip = sf_korea_watershed,
+            wfun = "gaussian",
+            bw = 5000,
+            dist_method = "geodesic"
           )
-        nemittors
+        result
       }
-    ),    targets::tar_target(
+    ),
+    targets::tar_target(
       name = df_feat_incorrect_merged,
       command = {
         df_res <-
@@ -889,14 +907,16 @@ list_process_feature <-
     targets::tar_target(
       name = df_feat_grid_emittors,
       command = {
-        nemittors <-
-          sf::st_join(
-            y = sf_feat_nemittors,
-            x = list_pred_calc_grid,
-            join = sf::st_intersects
-          ) %>%
-          sf::st_drop_geometry()
-        nemittors
+        result <-
+          gw_emittors(
+            input = list_pred_calc_grid,
+            target = sf_emission_locs,
+            clip = sf_korea_watershed,
+            wfun = "gaussian",
+            bw = 5000,
+            dist_method = "geodesic"
+          )
+        result
       },
       iteration = "list",
       pattern = map(list_pred_calc_grid),
