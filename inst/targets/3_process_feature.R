@@ -865,7 +865,7 @@ list_process_feature <-
         # )
       },
       iteration = "list",
-      pattern = map(list_pred_calc_grid, chr_landuse_freq_file),
+      pattern = cross(list_pred_calc_grid, chr_landuse_freq_file),
       resources = targets::tar_resources(
         crew = targets::tar_resources_crew(controller = "controller_20")
       )
@@ -921,7 +921,7 @@ list_process_feature <-
       iteration = "list",
       pattern = map(list_pred_calc_grid),
       resources = targets::tar_resources(
-        crew = targets::tar_resources_crew(controller = "controller_20")
+        crew = targets::tar_resources_crew(controller = "controller_08")
       )
     ),
     targets::tar_target(
