@@ -1,0 +1,104 @@
+configfile: "workflow/config.yaml"
+
+import os
+
+rule all:
+    input:
+        expand(os.path.join(config["output_dir"], "predictions_{year}.gpkg"), year=config["years"]),
+        os.path.join(config["output_dir"], "model_comparison.csv")
+
+rule preprocess_landuse:
+    input:
+        landuse_files = lambda wildcards: [os.path.join(config["data_dir"], config["landuse_dir"], f) for f in os.listdir(os.path.join(config["data_dir"], config["landuse_dir"])) if f.endswith(".tif")]
+    output:
+        freq_raster = os.path.join(config["output_dir"], "landuse_freq_{year}.tif")
+    script:
+        "scripts/preprocess_landuse.py"
+
+rule preprocess_mtpi:
+    input:
+        mtpi = os.path.join(config["data_dir"], config["files"]["mtpi"])
+    output:
+        mtpi_1km = os.path.join(config["output_dir"], "mtpi_1km.tif")
+    script:
+        "scripts/preprocess_mtpi.py"
+
+rule prepare_monitors:
+    input:
+        sites = os.path.join(config["git_dir"], config["files"]["sites_history"]),
+        measurements = os.path.join(config["data_dir"], config["files"]["measurements"])
+    output:
+        correct = os.path.join(config["output_dir"], "monitors_correct.parquet"),
+        incorrect = os.path.join(config["output_dir"], "monitors_incorrect.parquet")
+    script:
+        "scripts/prepare_monitors.py"
+
+rule prepare_grid:
+    input:
+        grid = os.path.join(config["data_dir"], config["files"]["grid_250m"])
+    output:
+        grid_parquet = os.path.join(config["output_dir"], "grid_250m.parquet")
+    script:
+        "scripts/prepare_grid.py"
+
+rule calc_features_monitors:
+    input:
+        monitors = os.path.join(config["output_dir"], "monitors_{type}.parquet"),
+        dsm = os.path.join(config["data_dir"], config["files"]["dsm"]),
+        dem = os.path.join(config["data_dir"], config["files"]["dem"]),
+        mtpi = os.path.join(config["data_dir"], config["files"]["mtpi"]),
+        mtpi_1km = os.path.join(config["output_dir"], "mtpi_1km.tif"),
+        emissions = os.path.join(config["data_dir"], config["files"]["emissions"]),
+        watersheds = os.path.join(config["data_dir"], config["files"]["watersheds"])
+    params:
+        road_dir = os.path.join(config["data_dir"], config["road_dir"]),
+        landuse_dir = config["output_dir"] # Where freq rasters are
+    output:
+        features = os.path.join(config["output_dir"], "features_monitors_{type}.parquet")
+    script:
+        "scripts/calc_features.py"
+
+rule calc_features_grid:
+    input:
+        grid = os.path.join(config["output_dir"], "grid_250m.parquet"),
+        dsm = os.path.join(config["data_dir"], config["files"]["dsm"]),
+        dem = os.path.join(config["data_dir"], config["files"]["dem"]),
+        mtpi = os.path.join(config["data_dir"], config["files"]["mtpi"]),
+        mtpi_1km = os.path.join(config["output_dir"], "mtpi_1km.tif"),
+        emissions = os.path.join(config["data_dir"], config["files"]["emissions"]),
+        watersheds = os.path.join(config["data_dir"], config["files"]["watersheds"])
+    params:
+        road_dir = os.path.join(config["data_dir"], config["road_dir"]),
+        landuse_dir = config["output_dir"]
+    output:
+        features = os.path.join(config["output_dir"], "features_grid.parquet")
+    script:
+        "scripts/calc_features.py"
+
+rule tune_models:
+    input:
+        features = os.path.join(config["output_dir"], "features_monitors_correct.parquet")
+    output:
+        params = os.path.join(config["output_dir"], "best_params.json")
+    script:
+        "scripts/tune_models.py"
+
+rule fit_predict:
+    input:
+        features_train = os.path.join(config["output_dir"], "features_monitors_correct.parquet"),
+        features_grid = os.path.join(config["output_dir"], "features_grid.parquet"),
+        params = os.path.join(config["output_dir"], "best_params.json")
+    output:
+        predictions = os.path.join(config["output_dir"], "predictions_{year}.gpkg")
+    script:
+        "scripts/fit_predict.py"
+
+rule compare_models:
+    input:
+        correct = os.path.join(config["output_dir"], "features_monitors_correct.parquet"),
+        incorrect = os.path.join(config["output_dir"], "features_monitors_incorrect.parquet"),
+        params = os.path.join(config["output_dir"], "best_params.json")
+    output:
+        comparison = os.path.join(config["output_dir"], "model_comparison.csv")
+    script:
+        "scripts/compare_models.py"
