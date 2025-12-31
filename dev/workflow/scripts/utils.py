@@ -6,7 +6,7 @@ from shapely.geometry import Point
 import rasterio
 from rasterio.mask import mask
 
-def gw_emittors(input_gdf, target_gdf, clip_gdf, wfun="gaussian", bw=1000, weight=None, dist_method="geodesic"):
+def gw_emittors(input_gdf, target_gdf, clip_gdf, wfun="gaussian", bw=1000, weight=None, emission_field = None, dist_method="geodesic"):
     """
     Calculate geographically weighted emissions.
     """
@@ -18,7 +18,7 @@ def gw_emittors(input_gdf, target_gdf, clip_gdf, wfun="gaussian", bw=1000, weigh
         target_gdf = target_gdf.to_crs(target_crs)
     if clip_gdf.crs != target_crs:
         clip_gdf = clip_gdf.to_crs(target_crs)
-    
+        
     # Intersect input with clip
     # We only care about inputs inside the clip
     input_in_clip = gpd.clip(input_gdf, clip_gdf)
@@ -33,6 +33,15 @@ def gw_emittors(input_gdf, target_gdf, clip_gdf, wfun="gaussian", bw=1000, weigh
     if target_clip.empty:
         input_gdf['gw_emission'] = 0
         return input_gdf
+    
+    if emission_field is not None:
+        if emission_field not in target_clip.columns:
+            raise UserWarning(f"emission_field '{emission_field}' not found in target_gdf columns. Initiating with ones...")
+            target_clip['emission'] = 1
+        else:
+            target_clip = target_clip.rename(columns={emission_field: 'emission'})
+    else:
+        target_clip['emission'] = 1
 
     # Calculate distances
     coords_input = np.array([(p.x, p.y) for p in input_in_clip.geometry])
