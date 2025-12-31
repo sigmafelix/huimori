@@ -4,3 +4,4 @@
 _targets/meta/meta
 container/*.sif
 .vscode
+**/.snakemake

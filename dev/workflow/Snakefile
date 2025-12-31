@@ -1,4 +1,4 @@
-configfile: "workflow/config.yaml"
+configfile: "config.yaml"
 
 import os
 
@@ -35,9 +35,11 @@ rule prepare_monitors:
 
 rule prepare_grid:
     input:
-        grid = os.path.join(config["data_dir"], config["files"]["grid_250m"])
+        reference = os.path.join(config["data_dir"], config["files"]["watersheds"])
+    params:
+        resolution = config["grid"]["resolution"]
     output:
-        grid_parquet = os.path.join(config["output_dir"], "grid_250m.parquet")
+        grid_parquet = os.path.join(config["output_dir"], "grid_30m.parquet")
     script:
         "scripts/prepare_grid.py"
 
@@ -60,7 +62,7 @@ rule calc_features_monitors:
 
 rule calc_features_grid:
     input:
-        grid = os.path.join(config["output_dir"], "grid_250m.parquet"),
+        grid = os.path.join(config["output_dir"], "grid_30m.parquet"),
         dsm = os.path.join(config["data_dir"], config["files"]["dsm"]),
         dem = os.path.join(config["data_dir"], config["files"]["dem"]),
         mtpi = os.path.join(config["data_dir"], config["files"]["mtpi"]),

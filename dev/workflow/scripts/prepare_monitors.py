@@ -6,6 +6,10 @@ def prepare_monitors(sites_path, measurements_path, output_correct, output_incor
     # Load sites
     sites = pd.read_excel(sites_path)
     
+    # Fix PyArrow error: Convert object columns to string to handle mixed types (e.g. datetimes in Excel)
+    for col in sites.select_dtypes(include=['object']).columns:
+        sites[col] = sites[col].astype(str)
+    
     # Basic cleaning (simplified from R)
     sites = sites[~sites['site_type'].str.contains("광화학|중금속|산성|유해", na=False)]
     
@@ -26,10 +30,11 @@ def prepare_monitors(sites_path, measurements_path, output_correct, output_incor
     
     # Summarize annual
     measurements['year'] = pd.to_datetime(measurements['date']).dt.year
-    annual = measurements.groupby(['TMSID', 'year'])[['PM10', 'PM25']].mean().reset_index()
+    annual = measurements.groupby(['TMSID', 'year'], observed=False)[['PM10', 'PM25']].mean().reset_index()
     
     # Merge
     merged = pd.merge(annual, sites, on='TMSID', how='left')
+    merged = gpd.GeoDataFrame(merged, geometry='geometry', crs="EPSG:5179")
     
     # Correct: Use year-specific locations if available (R logic is complex here)
     # For now, we assume 'merged' has the correct structure
@@ -38,7 +43,8 @@ def prepare_monitors(sites_path, measurements_path, output_correct, output_incor
     # Incorrect: Use a single location per site (e.g., first available)
     sites_unique = sites.drop_duplicates(subset=['TMSID'])
     incorrect = pd.merge(annual, sites_unique, on='TMSID', how='left')
-    incorrect.to_parquet(output_incorrect)
+    incorrect = gpd.GeoDataFrame(incorrect, geometry='geometry', crs="EPSG:5179")
+    incorrect.to_parquet(output_incorrect, schema_version = '1.0.0')
 
 if __name__ == "__main__":
     prepare_monitors(snakemake.input.sites, snakemake.input.measurements, snakemake.output.correct, snakemake.output.incorrect)

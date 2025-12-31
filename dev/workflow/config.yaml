@@ -1,5 +1,6 @@
 data_dir: "/mnt/s/Korea"
 output_dir: "/mnt/u/interim_results"
+git_dir: "/home/isong/GitHub/histmap-ko"
 
 files:
   sites_history: "data/sites/sites_history_cleaning_20250311.xlsx"
@@ -9,9 +10,11 @@ files:
   mtpi: "elevation/kngii_90m_mtpi.tif"
   watersheds: "watersheds/data/watershed-korea.gpkg"
   emissions: "emission/data/emission_location.gpkg"
-  grid_250m: "grid_250m.gpkg"
   weather: "weather/data/asos_2010_2023.parquet"
   weather_sites: "weather/data/asos_sites.xlsx"
+
+grid:
+  resolution: 250
 
 landuse_dir: "landuse/glc_fcs30d"
 road_dir: "transportation/nodelink/data"
