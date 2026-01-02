@@ -14,7 +14,7 @@ pub struct Args {
     #[arg(short, long, value_name = "FILE")]
     pub output: String,
 
-    /// Focal radius in meters (e.g., 2000 for 2km)
+    /// Focal radius in meters (e.g., 2000 for 2km) or cells (if --radius-in-cells is set)
     #[arg(short, long, value_name = "METERS")]
     pub radius: f64,
 
@@ -29,4 +29,24 @@ pub struct Args {
     /// Enable verbose logging
     #[arg(short, long)]
     pub verbose: bool,
+
+    /// Chunk size for processing (pixels). Default: 2000. Set to 0 to disable chunking.
+    #[arg(long, default_value = "2000", value_name = "PIXELS")]
+    pub chunksize: usize,
+
+    /// Create Cloud-Optimized GeoTIFF (COG) with overviews
+    #[arg(long)]
+    pub cog: bool,
+
+    /// Compression type for output (DEFLATE, LZW, ZSTD, NONE)
+    #[arg(long, default_value = "DEFLATE", value_name = "TYPE")]
+    pub compression: String,
+
+    /// Tile size for COG output (pixels, must be multiple of 16)
+    #[arg(long, default_value = "512", value_name = "PIXELS")]
+    pub tile_size: usize,
+
+    /// Interpret radius as number of cells instead of meters
+    #[arg(long)]
+    pub radius_in_cells: bool,
 }

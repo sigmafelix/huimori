@@ -25,20 +25,14 @@ fn extract_classes(data: &Array2<i32>, nodata: Option<i32>) -> Vec<i32> {
 /// Calculate focal mean for all classes in the raster
 pub fn calculate_focal_means(
     data: &Array2<i32>,
-    pixel_size: f64,
-    radius_meters: f64,
+    radius_in_cells: usize,
     nodata: Option<i32>,
 ) -> Result<(Vec<Array2<f32>>, Vec<i32>)> {
-    if radius_meters <= 0.0 {
-        return Err(FocalMeanError::InvalidRadius(radius_meters));
+    if radius_in_cells == 0 {
+        return Err(FocalMeanError::InvalidRadius(0.0));
     }
 
-    // Convert radius from meters to cells
-    let window_cells = (radius_meters / pixel_size).ceil() as usize;
-    info!(
-        "Using window radius of {} cells ({} meters at {} meter resolution)",
-        window_cells, radius_meters, pixel_size
-    );
+    info!("Using window radius of {} cells", radius_in_cells);
 
     // Extract unique classes
     let classes = extract_classes(data, nodata);
@@ -53,7 +47,7 @@ pub fn calculate_focal_means(
         .par_iter()
         .map(|&class_value| {
             debug!("Processing class {}", class_value);
-            calculate_class_fraction(data, class_value, window_cells, nodata)
+            calculate_class_fraction(data, class_value, radius_in_cells, nodata)
         })
         .collect();
 
