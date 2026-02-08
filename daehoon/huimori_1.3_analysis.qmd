@@ -36,10 +36,13 @@ library(geosphere)
 library(tidymodels)
 library(spatialsample)
 library(finetune)
+library(vip)
 
 library(future)
 library(future.apply)
 library(future.mirai)
+
+options(tibble.width = Inf)
 ```
 
 1.3에 반영해야할 점
@@ -667,7 +670,7 @@ lapply(ras_era5, function(x) {
 })
 ```
 
-## 버퍼 추출 작업 (1000m)
+## 버퍼 추출(30m)과 XGBoost
 
 ```{r}
 sf_monitors_unique <- dt_daily %>%
@@ -682,7 +685,7 @@ list_monitors_era5 <- lapply(names(ras_era5), function(var_name) {
     y = sf_monitors_unique,
     id = "TMSID2",
     func = "mean",
-    radius = 1000
+    radius = 30
   )
   dt_long <- melt(
     as.data.table(ext_res),
@@ -713,7 +716,6 @@ dt_daily_era5 <- merge(
 ```
 
 
-## XGBoost
 
 trees = (n_estimators): 학습 과정에서 생성된 decision tree의 총 개수
 
@@ -775,12 +777,14 @@ tuning_results_list <- furrr::future_map(all_targets, function(target) {
   options(future.globals.maxSize = 100 * 1024^3)
   
   suppressPackageStartupMessages({
+    library(sf)
     library(tidymodels)
     library(spatialsample)
     library(finetune)
     library(xgboost)
     library(dplyr)
     library(tidyr)
+    library(vip)
   })
   
   # 데이터 준비
@@ -832,14 +836,23 @@ tuning_results_list <- furrr::future_map(all_targets, function(target) {
   # 최종 모델 학습 및 검증
   final_fit_res <- finalize_workflow(target_wf, best_p) %>% fit(data = df_train_sub)
   
+  # 변수 중요도 추출 (상위 10개
+  vi_data <- final_fit_res %>%
+    extract_fit_parsnip() %>%
+    vi() %>%
+    slice_max(Importance, n = 10) %>%
+    mutate(vi_combined = paste0(Variable, "(", round(Importance, 4), ")")) %>%
+    summarise(top_features = paste(vi_combined, collapse = ", "))
+  
   # 성능 지표 산출 및 파라미터 결합
   metrics <- predict(final_fit_res, df_test_sub) %>%
     bind_cols(df_test_sub %>% st_drop_geometry() %>% select(all_of(target))) %>%
     metric_set(rmse, mae, rsq)(truth = !!sym(target), estimate = .pred) %>%
     select(.metric, .estimate) %>%
     pivot_wider(names_from = .metric, values_from = .estimate) %>%
-    mutate(target_variable = target) %>%
-    # 최적 파라미터 값 추가
+    mutate(
+      target_variable = target,
+      importance_top10 = vi_data$top_features) %>%
     bind_cols(best_p %>% select(-.config))
   
   gc()
@@ -851,7 +864,7 @@ tuning_results_list <- furrr::future_map(all_targets, function(target) {
                     df_test_full = df_test_full,
                     id_vars_pool = id_vars_pool,
                     all_targets = all_targets),
-     packages = c("tidymodels", "spatialsample", "finetune", "xgboost", "dplyr", "tidyr", "sf")
+     packages = c("tidymodels", "spatialsample", "finetune", "xgboost", "dplyr", "tidyr", "sf", "vip")
    ))
 
 # 3. 결과 통합
@@ -869,11 +882,451 @@ print("--- PM25 모델 성능 순위 ---")
 print(summary_pm25)
 
 write.csv(summary_pm10, 
-          file = file.path(target_dir, "summary_performance_era5_pm10.csv"), 
+          file = file.path(target_dir, "summary_performance_era5_pm10_30m.csv"), 
           row.names = FALSE)
 
 write.csv(summary_pm25, 
-          file = file.path(target_dir, "summary_performance_era5_pm25.csv"), 
+          file = file.path(target_dir, "summary_performance_era5_pm25_30m.csv"), 
+          row.names = FALSE)
+```
+
+## 버퍼 추출(100m)과 XGBoost
+
+```{r}
+sf_monitors_unique <- dt_daily %>%
+  dplyr::distinct(TMSID2, geometry) %>%
+  dplyr::filter(!sf::st_is_empty(geometry)) %>% 
+  st_as_sf() %>% 
+  st_transform(terra::crs(ras_era5[1]))
+
+list_monitors_era5 <- lapply(names(ras_era5), function(var_name) {
+  ext_res <- chopin::extract_at(
+    x = ras_era5[[var_name]],
+    y = sf_monitors_unique,
+    id = "TMSID2",
+    func = "mean",
+    radius = 100
+  )
+  dt_long <- melt(
+    as.data.table(ext_res),
+    id.vars = "TMSID2",
+    variable.name = "date_str",
+    value.name = var_name # 컬럼명을 해당 변수명으로 설정
+  )
+  dt_long[, date := as.IDate(stringr::str_extract(date_str, "\\d{8}$"), format = "%Y%m%d")]
+  dt_long[, .(TMSID2, date, get(var_name))] %>% setnames("V3", var_name)
+})
+
+# 2. 모든 변수 리스트를 하나의 Data Table로 병합
+# TMSID2와 date를 기준으로 순차적 Join 수행
+dt_monitors_era5 <- purrr::reduce(list_monitors_era5, function(x, y) {
+  merge(x, y, by = c("TMSID2", "date"), all = TRUE)
+})
+
+# 3. 정렬
+setorder(dt_monitors_era5, TMSID2, date)
+
+# 4. dt_daily와 합치기
+dt_daily_era5 <- merge(
+  x = dt_daily, 
+  y = dt_monitors_era5, 
+  by = c("TMSID2", "date"), 
+  all.x = TRUE
+)
+```
+
+
+
+trees = (n_estimators): 학습 과정에서 생성된 decision tree의 총 개수
+
+tree_depth = (max_depth): 개별 나무가 아래로 얼마나 깊게 내려갈지를 결정하는 최대 층수.
+
+learn_rate = (eta): 각 단계에서 새로 생성된 나무의 기여도를 얼마나 반영할지 결정하는 학습률.
+
+mtry = (colsample_bytree): 각 노드를 분할할 때 무작위로 후보군에 포함시킬 독립 변수의 개수.
+
+min_n = (min_child_weight): 노드가 더 분할되기 위해 해당 노드에 포함되어야 하는 최소 관측치 수.
+
+
+```{r}
+df_model_full <- st_as_sf(dt_daily_era5)
+
+# 예측 변수군 (Targets)
+target_vars <- c("PM10", "PM25", 
+                 grep("^PM10_", names(df_model_full), value = TRUE), 
+                 grep("^PM25_", names(df_model_full), value = TRUE))
+
+# 예측에 사용할 변수군 (Predictors)
+loc_topo_vars <- c("site_type", "d_road", "dsm", "dem", "mtpi", "mtpi_1km")
+landuse_vars  <- grep("^lc_", names(df_model_full), value = TRUE)
+meteo_vars    <- c("temp_2m", "solar_rad", "u_wind", "v_wind", "pressure", "precip")
+
+# 모든 식별자 및 보조 정보 (학습 제외 대상)
+id_vars <- c("TMSID", "TMSID2", "date", "year", "month", "day", 
+             "date_start", "date_end", "coords_google")
+
+# 데이터 정제 (select 시 id_vars를 모두 포함)
+df_model_refined <- df_model_full %>%
+  select(any_of(id_vars), all_of(target_vars), 
+         all_of(loc_topo_vars), all_of(landuse_vars), 
+         all_of(meteo_vars)) %>%
+  filter(!is.na(site_type))
+
+df_train_full <- df_model_refined %>% filter(year < 2023)
+df_test_full  <- df_model_refined %>% filter(year == 2023)
+```
+
+
+```{r}
+Sys.setenv(R_FUTURE_GLOBALS_MAXSIZE = "100000000000") 
+options(future.globals.maxSize = 100 * 1024^3)
+plan(mirai_multisession, workers = 5)
+
+# 0. 식별자 리스트 정의 (Recipe 에러 방지용)
+id_vars_pool <- c("TMSID", "TMSID2", "date", "year", "month", "day", "date_start", "date_end", "coords_google")
+
+# 1. 타겟 정의
+pm10_targets <- c("PM10", grep("^PM10_", names(df_train_full), value = TRUE))
+pm25_targets <- c("PM25", grep("^PM25_", names(df_train_full), value = TRUE))
+all_targets  <- c(pm10_targets, pm25_targets)
+
+message(paste(">>> 병렬 튜닝 시작 (Workers: 5, Nthread: 8 / 총 타겟:", length(all_targets), ")"))
+
+# 2. 병렬 루프 수행 (성능 지표 + 최적 파라미터 기록)
+tuning_results_list <- furrr::future_map(all_targets, function(target) {
+  options(future.globals.maxSize = 100 * 1024^3)
+  
+  suppressPackageStartupMessages({
+    library(sf)
+    library(tidymodels)
+    library(spatialsample)
+    library(finetune)
+    library(xgboost)
+    library(dplyr)
+    library(tidyr)
+    library(vip)
+  })
+  
+  # 데이터 준비
+  df_train_sub <- df_train_full %>% filter(!is.na(!!sym(target)))
+  df_test_sub  <- df_test_full %>% filter(!is.na(!!sym(target)))
+  
+  set.seed(123)
+  target_folds <- spatial_block_cv(df_train_sub, v = 5)
+  
+  # 레시피 설정
+  target_recipe <- recipe(formula(paste(target, "~ .")), data = df_train_sub) %>%
+    update_role(any_of(id_vars_pool), geometry, new_role = "ID") %>%
+    update_role(all_of(all_targets), new_role = "target_pool") %>%
+    update_role(all_of(target), new_role = "outcome") %>%
+    step_rm(has_role("target_pool"), -has_role("outcome")) %>% 
+    step_unknown(all_nominal_predictors(), new_level = "unknown") %>%
+    step_novel(all_nominal_predictors()) %>%
+    step_impute_median(all_numeric_predictors()) %>% 
+    step_dummy(all_nominal_predictors()) %>%
+    step_zv(all_predictors())
+  
+  # 모델 사양
+  target_spec <- boost_tree(
+    trees = 500,
+    tree_depth = tune(),
+    learn_rate = tune(),
+    mtry = tune(),
+    min_n = tune(),
+    loss_reduction = tune()
+  ) %>% 
+    set_engine("xgboost", tree_method = "hist", nthread = 8) %>% 
+    set_mode("regression")
+  
+  target_wf <- workflow() %>% add_recipe(target_recipe) %>% add_model(target_spec)
+  
+  # Race ANOVA 튜닝
+  set.seed(123)
+  target_tune_res <- tune_race_anova(
+    target_wf,
+    resamples = target_folds,
+    grid = 25,
+    metrics = metric_set(rmse, mae, rsq),
+    control = control_race(save_pred = FALSE, verbose_elim = FALSE)
+  )
+  
+  # 최적 파라미터 추출
+  best_p <- select_best(target_tune_res, metric = "rmse")
+  
+  # 최종 모델 학습 및 검증
+  final_fit_res <- finalize_workflow(target_wf, best_p) %>% fit(data = df_train_sub)
+  
+  # 변수 중요도 추출 (상위 10개
+  vi_data <- final_fit_res %>%
+    extract_fit_parsnip() %>%
+    vi() %>%
+    slice_max(Importance, n = 10) %>%
+    mutate(vi_combined = paste0(Variable, "(", round(Importance, 4), ")")) %>%
+    summarise(top_features = paste(vi_combined, collapse = ", "))
+  
+  # 성능 지표 산출 및 파라미터 결합
+  metrics <- predict(final_fit_res, df_test_sub) %>%
+    bind_cols(df_test_sub %>% st_drop_geometry() %>% select(all_of(target))) %>%
+    metric_set(rmse, mae, rsq)(truth = !!sym(target), estimate = .pred) %>%
+    select(.metric, .estimate) %>%
+    pivot_wider(names_from = .metric, values_from = .estimate) %>%
+    mutate(
+      target_variable = target,
+      importance_top10 = vi_data$top_features) %>%
+    bind_cols(best_p %>% select(-.config))
+  
+  gc()
+  return(metrics)
+  
+}, .options = furrr::furrr_options(
+     seed = TRUE, 
+     globals = list(df_train_full = df_train_full, 
+                    df_test_full = df_test_full,
+                    id_vars_pool = id_vars_pool,
+                    all_targets = all_targets),
+     packages = c("tidymodels", "spatialsample", "finetune", "xgboost", "dplyr", "tidyr", "sf", "vip")
+   ))
+
+# 3. 결과 통합
+all_results_df <- bind_rows(tuning_results_list)
+
+summary_pm10 <- all_results_df %>% filter(target_variable %in% pm10_targets) %>% arrange(rmse)
+summary_pm25 <- all_results_df %>% filter(target_variable %in% pm25_targets) %>% arrange(rmse)
+```
+
+```{r}
+print("--- PM10 모델 성능 순위 ---")
+print(summary_pm10)
+
+print("--- PM25 모델 성능 순위 ---")
+print(summary_pm25)
+
+write.csv(summary_pm10, 
+          file = file.path(target_dir, "summary_performance_era5_pm10_100m.csv"), 
+          row.names = FALSE)
+
+write.csv(summary_pm25, 
+          file = file.path(target_dir, "summary_performance_era5_pm25_100m.csv"), 
+          row.names = FALSE)
+```
+
+## 버퍼 추출(1000m)과 XGBoost
+
+```{r}
+sf_monitors_unique <- dt_daily %>%
+  dplyr::distinct(TMSID2, geometry) %>%
+  dplyr::filter(!sf::st_is_empty(geometry)) %>% 
+  st_as_sf() %>% 
+  st_transform(terra::crs(ras_era5[1]))
+
+list_monitors_era5 <- lapply(names(ras_era5), function(var_name) {
+  ext_res <- chopin::extract_at(
+    x = ras_era5[[var_name]],
+    y = sf_monitors_unique,
+    id = "TMSID2",
+    func = "mean",
+    radius = 1000
+  )
+  dt_long <- melt(
+    as.data.table(ext_res),
+    id.vars = "TMSID2",
+    variable.name = "date_str",
+    value.name = var_name # 컬럼명을 해당 변수명으로 설정
+  )
+  dt_long[, date := as.IDate(stringr::str_extract(date_str, "\\d{8}$"), format = "%Y%m%d")]
+  dt_long[, .(TMSID2, date, get(var_name))] %>% setnames("V3", var_name)
+})
+
+# 2. 모든 변수 리스트를 하나의 Data Table로 병합
+# TMSID2와 date를 기준으로 순차적 Join 수행
+dt_monitors_era5 <- purrr::reduce(list_monitors_era5, function(x, y) {
+  merge(x, y, by = c("TMSID2", "date"), all = TRUE)
+})
+
+# 3. 정렬
+setorder(dt_monitors_era5, TMSID2, date)
+
+# 4. dt_daily와 합치기
+dt_daily_era5 <- merge(
+  x = dt_daily, 
+  y = dt_monitors_era5, 
+  by = c("TMSID2", "date"), 
+  all.x = TRUE
+)
+```
+
+
+
+trees = (n_estimators): 학습 과정에서 생성된 decision tree의 총 개수
+
+tree_depth = (max_depth): 개별 나무가 아래로 얼마나 깊게 내려갈지를 결정하는 최대 층수.
+
+learn_rate = (eta): 각 단계에서 새로 생성된 나무의 기여도를 얼마나 반영할지 결정하는 학습률.
+
+mtry = (colsample_bytree): 각 노드를 분할할 때 무작위로 후보군에 포함시킬 독립 변수의 개수.
+
+min_n = (min_child_weight): 노드가 더 분할되기 위해 해당 노드에 포함되어야 하는 최소 관측치 수.
+
+
+```{r}
+df_model_full <- st_as_sf(dt_daily_era5)
+
+# 예측 변수군 (Targets)
+target_vars <- c("PM10", "PM25", 
+                 grep("^PM10_", names(df_model_full), value = TRUE), 
+                 grep("^PM25_", names(df_model_full), value = TRUE))
+
+# 예측에 사용할 변수군 (Predictors)
+loc_topo_vars <- c("site_type", "d_road", "dsm", "dem", "mtpi", "mtpi_1km")
+landuse_vars  <- grep("^lc_", names(df_model_full), value = TRUE)
+meteo_vars    <- c("temp_2m", "solar_rad", "u_wind", "v_wind", "pressure", "precip")
+
+# 모든 식별자 및 보조 정보 (학습 제외 대상)
+id_vars <- c("TMSID", "TMSID2", "date", "year", "month", "day", 
+             "date_start", "date_end", "coords_google")
+
+# 데이터 정제 (select 시 id_vars를 모두 포함)
+df_model_refined <- df_model_full %>%
+  select(any_of(id_vars), all_of(target_vars), 
+         all_of(loc_topo_vars), all_of(landuse_vars), 
+         all_of(meteo_vars)) %>%
+  filter(!is.na(site_type))
+
+df_train_full <- df_model_refined %>% filter(year < 2023)
+df_test_full  <- df_model_refined %>% filter(year == 2023)
+```
+
+
+```{r}
+Sys.setenv(R_FUTURE_GLOBALS_MAXSIZE = "100000000000") 
+options(future.globals.maxSize = 100 * 1024^3)
+plan(mirai_multisession, workers = 5)
+
+# 0. 식별자 리스트 정의 (Recipe 에러 방지용)
+id_vars_pool <- c("TMSID", "TMSID2", "date", "year", "month", "day", "date_start", "date_end", "coords_google")
+
+# 1. 타겟 정의
+pm10_targets <- c("PM10", grep("^PM10_", names(df_train_full), value = TRUE))
+pm25_targets <- c("PM25", grep("^PM25_", names(df_train_full), value = TRUE))
+all_targets  <- c(pm10_targets, pm25_targets)
+
+message(paste(">>> 병렬 튜닝 시작 (Workers: 5, Nthread: 8 / 총 타겟:", length(all_targets), ")"))
+
+# 2. 병렬 루프 수행 (성능 지표 + 최적 파라미터 기록)
+tuning_results_list <- furrr::future_map(all_targets, function(target) {
+  options(future.globals.maxSize = 100 * 1024^3)
+  
+  suppressPackageStartupMessages({
+    library(sf)
+    library(tidymodels)
+    library(spatialsample)
+    library(finetune)
+    library(xgboost)
+    library(dplyr)
+    library(tidyr)
+    library(vip)
+  })
+  
+  # 데이터 준비
+  df_train_sub <- df_train_full %>% filter(!is.na(!!sym(target)))
+  df_test_sub  <- df_test_full %>% filter(!is.na(!!sym(target)))
+  
+  set.seed(123)
+  target_folds <- spatial_block_cv(df_train_sub, v = 5)
+  
+  # 레시피 설정
+  target_recipe <- recipe(formula(paste(target, "~ .")), data = df_train_sub) %>%
+    update_role(any_of(id_vars_pool), geometry, new_role = "ID") %>%
+    update_role(all_of(all_targets), new_role = "target_pool") %>%
+    update_role(all_of(target), new_role = "outcome") %>%
+    step_rm(has_role("target_pool"), -has_role("outcome")) %>% 
+    step_unknown(all_nominal_predictors(), new_level = "unknown") %>%
+    step_novel(all_nominal_predictors()) %>%
+    step_impute_median(all_numeric_predictors()) %>% 
+    step_dummy(all_nominal_predictors()) %>%
+    step_zv(all_predictors())
+  
+  # 모델 사양
+  target_spec <- boost_tree(
+    trees = 500,
+    tree_depth = tune(),
+    learn_rate = tune(),
+    mtry = tune(),
+    min_n = tune(),
+    loss_reduction = tune()
+  ) %>% 
+    set_engine("xgboost", tree_method = "hist", nthread = 8) %>% 
+    set_mode("regression")
+  
+  target_wf <- workflow() %>% add_recipe(target_recipe) %>% add_model(target_spec)
+  
+  # Race ANOVA 튜닝
+  set.seed(123)
+  target_tune_res <- tune_race_anova(
+    target_wf,
+    resamples = target_folds,
+    grid = 25,
+    metrics = metric_set(rmse, mae, rsq),
+    control = control_race(save_pred = FALSE, verbose_elim = FALSE)
+  )
+  
+  # 최적 파라미터 추출
+  best_p <- select_best(target_tune_res, metric = "rmse")
+  
+  # 최종 모델 학습 및 검증
+  final_fit_res <- finalize_workflow(target_wf, best_p) %>% fit(data = df_train_sub)
+  
+  # 변수 중요도 추출 (상위 10개
+  vi_data <- final_fit_res %>%
+    extract_fit_parsnip() %>%
+    vi() %>%
+    slice_max(Importance, n = 10) %>%
+    mutate(vi_combined = paste0(Variable, "(", round(Importance, 4), ")")) %>%
+    summarise(top_features = paste(vi_combined, collapse = ", "))
+  
+  # 성능 지표 산출 및 파라미터 결합
+  metrics <- predict(final_fit_res, df_test_sub) %>%
+    bind_cols(df_test_sub %>% st_drop_geometry() %>% select(all_of(target))) %>%
+    metric_set(rmse, mae, rsq)(truth = !!sym(target), estimate = .pred) %>%
+    select(.metric, .estimate) %>%
+    pivot_wider(names_from = .metric, values_from = .estimate) %>%
+    mutate(
+      target_variable = target,
+      importance_top10 = vi_data$top_features) %>%
+    bind_cols(best_p %>% select(-.config))
+  
+  gc()
+  return(metrics)
+  
+}, .options = furrr::furrr_options(
+     seed = TRUE, 
+     globals = list(df_train_full = df_train_full, 
+                    df_test_full = df_test_full,
+                    id_vars_pool = id_vars_pool,
+                    all_targets = all_targets),
+     packages = c("tidymodels", "spatialsample", "finetune", "xgboost", "dplyr", "tidyr", "sf", "vip")
+   ))
+
+# 3. 결과 통합
+all_results_df <- bind_rows(tuning_results_list)
+
+summary_pm10 <- all_results_df %>% filter(target_variable %in% pm10_targets) %>% arrange(rmse)
+summary_pm25 <- all_results_df %>% filter(target_variable %in% pm25_targets) %>% arrange(rmse)
+```
+
+```{r}
+print("--- PM10 모델 성능 순위 ---")
+print(summary_pm10)
+
+print("--- PM25 모델 성능 순위 ---")
+print(summary_pm25)
+
+write.csv(summary_pm10, 
+          file = file.path(target_dir, "summary_performance_era5_pm10_1000m.csv"), 
+          row.names = FALSE)
+
+write.csv(summary_pm25, 
+          file = file.path(target_dir, "summary_performance_era5_pm25_1000m.csv"), 
           row.names = FALSE)
 ```
 
@@ -977,7 +1430,7 @@ lapply(ras_chelsa, function(x) terra::summary(x[[1:3]]))
 ```
 
 
-## 버퍼 추출 작업 (1000m)
+## 버퍼 추출(1000m)과 XGBoost
 
 ```{r}
 ### chelsa와 era5는 좌표계가 wgs84로 동일함.
@@ -988,7 +1441,7 @@ list_monitors_chelsa <- lapply(names(ras_chelsa)[c(1,2,5)], function(var_name) {
     y = sf_monitors_unique,
     id = "TMSID2",
     func = "mean",
-    radius = 1000
+    radius = 30
   )
   dt_long <- melt(
     as.data.table(ext_res),
@@ -1017,8 +1470,6 @@ dt_daily_chelsa <- merge(
   all.x = TRUE
 )
 ```
-
-## XGBoost
 
 trees = (n_estimators): 학습 과정에서 생성된 decision tree의 총 개수
 
@@ -1079,12 +1530,14 @@ tuning_results_list <- furrr::future_map(all_targets, function(target) {
   options(future.globals.maxSize = 100 * 1024^3)
   
   suppressPackageStartupMessages({
+    library(sf)
     library(tidymodels)
     library(spatialsample)
     library(finetune)
     library(xgboost)
     library(dplyr)
     library(tidyr)
+    library(vip)
   })
   
   # 데이터 준비
@@ -1136,14 +1589,23 @@ tuning_results_list <- furrr::future_map(all_targets, function(target) {
   # 최종 모델 학습 및 검증
   final_fit_res <- finalize_workflow(target_wf, best_p) %>% fit(data = df_train_sub)
   
+  # 변수 중요도 추출 (상위 10개
+  vi_data <- final_fit_res %>%
+    extract_fit_parsnip() %>%
+    vi() %>%
+    slice_max(Importance, n = 10) %>%
+    mutate(vi_combined = paste0(Variable, "(", round(Importance, 4), ")")) %>%
+    summarise(top_features = paste(vi_combined, collapse = ", "))
+  
   # 성능 지표 산출 및 파라미터 결합
   metrics <- predict(final_fit_res, df_test_sub) %>%
     bind_cols(df_test_sub %>% st_drop_geometry() %>% select(all_of(target))) %>%
     metric_set(rmse, mae, rsq)(truth = !!sym(target), estimate = .pred) %>%
     select(.metric, .estimate) %>%
     pivot_wider(names_from = .metric, values_from = .estimate) %>%
-    mutate(target_variable = target) %>%
-    # 최적 파라미터 값 추가
+    mutate(
+      target_variable = target,
+      importance_top10 = vi_data$top_features) %>%
     bind_cols(best_p %>% select(-.config))
   
   gc()
@@ -1155,7 +1617,7 @@ tuning_results_list <- furrr::future_map(all_targets, function(target) {
                     df_test_full = df_test_full,
                     id_vars_pool = id_vars_pool,
                     all_targets = all_targets),
-     packages = c("tidymodels", "spatialsample", "finetune", "xgboost", "dplyr", "tidyr", "sf")
+     packages = c("tidymodels", "spatialsample", "finetune", "xgboost", "dplyr", "tidyr", "sf", "vip")
    ))
 
 # 3. 결과 통합
@@ -1173,15 +1635,440 @@ print("--- PM25 모델 성능 순위 ---")
 print(summary_pm25)
 
 write.csv(summary_pm10, 
-          file = file.path(target_dir, "summary_performance_chelsa_pm10.csv"), 
+          file = file.path(target_dir, "summary_performance_era5_pm10_30m.csv"), 
           row.names = FALSE)
 
 write.csv(summary_pm25, 
-          file = file.path(target_dir, "summary_performance_chelsa_pm25.csv"), 
+          file = file.path(target_dir, "summary_performance_era5_pm25_30m.csv"), 
           row.names = FALSE)
 ```
 
 
+## 버퍼 추출(100m)과 XGBoost
+
+```{r}
+### chelsa와 era5는 좌표계가 wgs84로 동일함.
+
+list_monitors_chelsa <- lapply(names(ras_chelsa)[c(1,2,5)], function(var_name) {
+  ext_res <- chopin::extract_at(
+    x = ras_chelsa[[var_name]],
+    y = sf_monitors_unique,
+    id = "TMSID2",
+    func = "mean",
+    radius = 100
+  )
+  dt_long <- melt(
+    as.data.table(ext_res),
+    id.vars = "TMSID2",
+    variable.name = "date_str",
+    value.name = var_name # 컬럼명을 해당 변수명으로 설정
+  )
+  dt_long[, date := as.IDate(stringr::str_extract(date_str, "\\d{8}$"), format = "%Y%m%d")]
+  dt_long[, .(TMSID2, date, get(var_name))] %>% setnames("V3", var_name)
+})
+
+# 2. 모든 변수 리스트를 하나의 Data Table로 병합
+# TMSID2와 date를 기준으로 순차적 Join 수행
+dt_monitors_chelsa <- purrr::reduce(list_monitors_chelsa, function(x, y) {
+  merge(x, y, by = c("TMSID2", "date"), all = TRUE)
+})
+
+# 3. 정렬
+setorder(dt_monitors_chelsa, TMSID2, date)
+
+# 4. dt_daily와 합치기
+dt_daily_chelsa <- merge(
+  x = dt_daily, 
+  y = dt_monitors_chelsa, 
+  by = c("TMSID2", "date"), 
+  all.x = TRUE
+)
+```
+
+trees = (n_estimators): 학습 과정에서 생성된 decision tree의 총 개수
+
+tree_depth = (max_depth): 개별 나무가 아래로 얼마나 깊게 내려갈지를 결정하는 최대 층수.
+
+learn_rate = (eta): 각 단계에서 새로 생성된 나무의 기여도를 얼마나 반영할지 결정하는 학습률.
+
+mtry = (colsample_bytree): 각 노드를 분할할 때 무작위로 후보군에 포함시킬 독립 변수의 개수.
+
+min_n = (min_child_weight): 노드가 더 분할되기 위해 해당 노드에 포함되어야 하는 최소 관측치 수.
+
+```{r}
+df_model_full <- st_as_sf(dt_daily_chelsa)
+
+# 예측 변수군 (Targets)
+target_vars <- c("PM10", "PM25", 
+                 grep("^PM10_", names(df_model_full), value = TRUE), 
+                 grep("^PM25_", names(df_model_full), value = TRUE))
+
+# 예측에 사용할 변수군 (Predictors)
+loc_topo_vars <- c("site_type", "d_road", "dsm", "dem", "mtpi", "mtpi_1km")
+landuse_vars  <- grep("^lc_", names(df_model_full), value = TRUE)
+meteo_vars    <- c("temp_2m", "solar_rad", "precip")
+
+# 모든 식별자 및 보조 정보 (학습 제외 대상)
+id_vars <- c("TMSID", "TMSID2", "date", "year", "month", "day", 
+             "date_start", "date_end", "coords_google")
+
+# 데이터 정제 (select 시 id_vars를 모두 포함)
+df_model_refined <- df_model_full %>%
+  select(any_of(id_vars), all_of(target_vars), 
+         all_of(loc_topo_vars), all_of(landuse_vars), 
+         all_of(meteo_vars)) %>%
+  filter(!is.na(site_type))
+
+df_train_full <- df_model_refined %>% filter(year < 2023)
+df_test_full  <- df_model_refined %>% filter(year == 2023)
+```
+
+
+```{r}
+Sys.setenv(R_FUTURE_GLOBALS_MAXSIZE = "100000000000") 
+options(future.globals.maxSize = 100 * 1024^3)
+plan(mirai_multisession, workers = 5)
+
+# 0. 식별자 리스트 정의 (Recipe 에러 방지용)
+id_vars_pool <- c("TMSID", "TMSID2", "date", "year", "month", "day", "date_start", "date_end", "coords_google")
+
+# 1. 타겟 정의
+pm10_targets <- c("PM10", grep("^PM10_", names(df_train_full), value = TRUE))
+pm25_targets <- c("PM25", grep("^PM25_", names(df_train_full), value = TRUE))
+all_targets  <- c(pm10_targets, pm25_targets)
+
+message(paste(">>> 병렬 튜닝 시작 (Workers: 5, Nthread: 8 / 총 타겟:", length(all_targets), ")"))
+
+# 2. 병렬 루프 수행 (성능 지표 + 최적 파라미터 기록)
+tuning_results_list <- furrr::future_map(all_targets, function(target) {
+  options(future.globals.maxSize = 100 * 1024^3)
+  
+  suppressPackageStartupMessages({
+    library(sf)
+    library(tidymodels)
+    library(spatialsample)
+    library(finetune)
+    library(xgboost)
+    library(dplyr)
+    library(tidyr)
+    library(vip)
+  })
+  
+  # 데이터 준비
+  df_train_sub <- df_train_full %>% filter(!is.na(!!sym(target)))
+  df_test_sub  <- df_test_full %>% filter(!is.na(!!sym(target)))
+  
+  set.seed(123)
+  target_folds <- spatial_block_cv(df_train_sub, v = 5)
+  
+  # 레시피 설정
+  target_recipe <- recipe(formula(paste(target, "~ .")), data = df_train_sub) %>%
+    update_role(any_of(id_vars_pool), geometry, new_role = "ID") %>%
+    update_role(all_of(all_targets), new_role = "target_pool") %>%
+    update_role(all_of(target), new_role = "outcome") %>%
+    step_rm(has_role("target_pool"), -has_role("outcome")) %>% 
+    step_unknown(all_nominal_predictors(), new_level = "unknown") %>%
+    step_novel(all_nominal_predictors()) %>%
+    step_impute_median(all_numeric_predictors()) %>% 
+    step_dummy(all_nominal_predictors()) %>%
+    step_zv(all_predictors())
+  
+  # 모델 사양
+  target_spec <- boost_tree(
+    trees = 500,
+    tree_depth = tune(),
+    learn_rate = tune(),
+    mtry = tune(),
+    min_n = tune(),
+    loss_reduction = tune()
+  ) %>% 
+    set_engine("xgboost", tree_method = "hist", nthread = 8) %>% 
+    set_mode("regression")
+  
+  target_wf <- workflow() %>% add_recipe(target_recipe) %>% add_model(target_spec)
+  
+  # Race ANOVA 튜닝
+  set.seed(123)
+  target_tune_res <- tune_race_anova(
+    target_wf,
+    resamples = target_folds,
+    grid = 25,
+    metrics = metric_set(rmse, mae, rsq),
+    control = control_race(save_pred = FALSE, verbose_elim = FALSE)
+  )
+  
+  # 최적 파라미터 추출
+  best_p <- select_best(target_tune_res, metric = "rmse")
+  
+  # 최종 모델 학습 및 검증
+  final_fit_res <- finalize_workflow(target_wf, best_p) %>% fit(data = df_train_sub)
+  
+  # 변수 중요도 추출 (상위 10개
+  vi_data <- final_fit_res %>%
+    extract_fit_parsnip() %>%
+    vi() %>%
+    slice_max(Importance, n = 10) %>%
+    mutate(vi_combined = paste0(Variable, "(", round(Importance, 4), ")")) %>%
+    summarise(top_features = paste(vi_combined, collapse = ", "))
+  
+  # 성능 지표 산출 및 파라미터 결합
+  metrics <- predict(final_fit_res, df_test_sub) %>%
+    bind_cols(df_test_sub %>% st_drop_geometry() %>% select(all_of(target))) %>%
+    metric_set(rmse, mae, rsq)(truth = !!sym(target), estimate = .pred) %>%
+    select(.metric, .estimate) %>%
+    pivot_wider(names_from = .metric, values_from = .estimate) %>%
+    mutate(
+      target_variable = target,
+      importance_top10 = vi_data$top_features) %>%
+    bind_cols(best_p %>% select(-.config))
+  
+  gc()
+  return(metrics)
+  
+}, .options = furrr::furrr_options(
+     seed = TRUE, 
+     globals = list(df_train_full = df_train_full, 
+                    df_test_full = df_test_full,
+                    id_vars_pool = id_vars_pool,
+                    all_targets = all_targets),
+     packages = c("tidymodels", "spatialsample", "finetune", "xgboost", "dplyr", "tidyr", "sf", "vip")
+   ))
+
+# 3. 결과 통합
+all_results_df <- bind_rows(tuning_results_list)
+
+summary_pm10 <- all_results_df %>% filter(target_variable %in% pm10_targets) %>% arrange(rmse)
+summary_pm25 <- all_results_df %>% filter(target_variable %in% pm25_targets) %>% arrange(rmse)
+```
+
+```{r}
+print("--- PM10 모델 성능 순위 ---")
+print(summary_pm10)
+
+print("--- PM25 모델 성능 순위 ---")
+print(summary_pm25)
+
+write.csv(summary_pm10, 
+          file = file.path(target_dir, "summary_performance_era5_pm10_100m.csv"), 
+          row.names = FALSE)
+
+write.csv(summary_pm25, 
+          file = file.path(target_dir, "summary_performance_era5_pm25_100m.csv"), 
+          row.names = FALSE)
+```
+
+## 버퍼 추출(1000m)과 XGBoost
+
+```{r}
+### chelsa와 era5는 좌표계가 wgs84로 동일함.
+
+list_monitors_chelsa <- lapply(names(ras_chelsa)[c(1,2,5)], function(var_name) {
+  ext_res <- chopin::extract_at(
+    x = ras_chelsa[[var_name]],
+    y = sf_monitors_unique,
+    id = "TMSID2",
+    func = "mean",
+    radius = 1000
+  )
+  dt_long <- melt(
+    as.data.table(ext_res),
+    id.vars = "TMSID2",
+    variable.name = "date_str",
+    value.name = var_name # 컬럼명을 해당 변수명으로 설정
+  )
+  dt_long[, date := as.IDate(stringr::str_extract(date_str, "\\d{8}$"), format = "%Y%m%d")]
+  dt_long[, .(TMSID2, date, get(var_name))] %>% setnames("V3", var_name)
+})
+
+# 2. 모든 변수 리스트를 하나의 Data Table로 병합
+# TMSID2와 date를 기준으로 순차적 Join 수행
+dt_monitors_chelsa <- purrr::reduce(list_monitors_chelsa, function(x, y) {
+  merge(x, y, by = c("TMSID2", "date"), all = TRUE)
+})
+
+# 3. 정렬
+setorder(dt_monitors_chelsa, TMSID2, date)
+
+# 4. dt_daily와 합치기
+dt_daily_chelsa <- merge(
+  x = dt_daily, 
+  y = dt_monitors_chelsa, 
+  by = c("TMSID2", "date"), 
+  all.x = TRUE
+)
+```
+
+trees = (n_estimators): 학습 과정에서 생성된 decision tree의 총 개수
+
+tree_depth = (max_depth): 개별 나무가 아래로 얼마나 깊게 내려갈지를 결정하는 최대 층수.
+
+learn_rate = (eta): 각 단계에서 새로 생성된 나무의 기여도를 얼마나 반영할지 결정하는 학습률.
+
+mtry = (colsample_bytree): 각 노드를 분할할 때 무작위로 후보군에 포함시킬 독립 변수의 개수.
+
+min_n = (min_child_weight): 노드가 더 분할되기 위해 해당 노드에 포함되어야 하는 최소 관측치 수.
+
+```{r}
+df_model_full <- st_as_sf(dt_daily_chelsa)
+
+# 예측 변수군 (Targets)
+target_vars <- c("PM10", "PM25", 
+                 grep("^PM10_", names(df_model_full), value = TRUE), 
+                 grep("^PM25_", names(df_model_full), value = TRUE))
+
+# 예측에 사용할 변수군 (Predictors)
+loc_topo_vars <- c("site_type", "d_road", "dsm", "dem", "mtpi", "mtpi_1km")
+landuse_vars  <- grep("^lc_", names(df_model_full), value = TRUE)
+meteo_vars    <- c("temp_2m", "solar_rad", "precip")
+
+# 모든 식별자 및 보조 정보 (학습 제외 대상)
+id_vars <- c("TMSID", "TMSID2", "date", "year", "month", "day", 
+             "date_start", "date_end", "coords_google")
+
+# 데이터 정제 (select 시 id_vars를 모두 포함)
+df_model_refined <- df_model_full %>%
+  select(any_of(id_vars), all_of(target_vars), 
+         all_of(loc_topo_vars), all_of(landuse_vars), 
+         all_of(meteo_vars)) %>%
+  filter(!is.na(site_type))
+
+df_train_full <- df_model_refined %>% filter(year < 2023)
+df_test_full  <- df_model_refined %>% filter(year == 2023)
+```
+
+
+```{r}
+Sys.setenv(R_FUTURE_GLOBALS_MAXSIZE = "100000000000") 
+options(future.globals.maxSize = 100 * 1024^3)
+plan(mirai_multisession, workers = 5)
+
+# 0. 식별자 리스트 정의 (Recipe 에러 방지용)
+id_vars_pool <- c("TMSID", "TMSID2", "date", "year", "month", "day", "date_start", "date_end", "coords_google")
+
+# 1. 타겟 정의
+pm10_targets <- c("PM10", grep("^PM10_", names(df_train_full), value = TRUE))
+pm25_targets <- c("PM25", grep("^PM25_", names(df_train_full), value = TRUE))
+all_targets  <- c(pm10_targets, pm25_targets)
+
+message(paste(">>> 병렬 튜닝 시작 (Workers: 5, Nthread: 8 / 총 타겟:", length(all_targets), ")"))
+
+# 2. 병렬 루프 수행 (성능 지표 + 최적 파라미터 기록)
+tuning_results_list <- furrr::future_map(all_targets, function(target) {
+  options(future.globals.maxSize = 100 * 1024^3)
+  
+  suppressPackageStartupMessages({
+    library(sf)
+    library(tidymodels)
+    library(spatialsample)
+    library(finetune)
+    library(xgboost)
+    library(dplyr)
+    library(tidyr)
+    library(vip)
+  })
+  
+  # 데이터 준비
+  df_train_sub <- df_train_full %>% filter(!is.na(!!sym(target)))
+  df_test_sub  <- df_test_full %>% filter(!is.na(!!sym(target)))
+  
+  set.seed(123)
+  target_folds <- spatial_block_cv(df_train_sub, v = 5)
+  
+  # 레시피 설정
+  target_recipe <- recipe(formula(paste(target, "~ .")), data = df_train_sub) %>%
+    update_role(any_of(id_vars_pool), geometry, new_role = "ID") %>%
+    update_role(all_of(all_targets), new_role = "target_pool") %>%
+    update_role(all_of(target), new_role = "outcome") %>%
+    step_rm(has_role("target_pool"), -has_role("outcome")) %>% 
+    step_unknown(all_nominal_predictors(), new_level = "unknown") %>%
+    step_novel(all_nominal_predictors()) %>%
+    step_impute_median(all_numeric_predictors()) %>% 
+    step_dummy(all_nominal_predictors()) %>%
+    step_zv(all_predictors())
+  
+  # 모델 사양
+  target_spec <- boost_tree(
+    trees = 500,
+    tree_depth = tune(),
+    learn_rate = tune(),
+    mtry = tune(),
+    min_n = tune(),
+    loss_reduction = tune()
+  ) %>% 
+    set_engine("xgboost", tree_method = "hist", nthread = 8) %>% 
+    set_mode("regression")
+  
+  target_wf <- workflow() %>% add_recipe(target_recipe) %>% add_model(target_spec)
+  
+  # Race ANOVA 튜닝
+  set.seed(123)
+  target_tune_res <- tune_race_anova(
+    target_wf,
+    resamples = target_folds,
+    grid = 25,
+    metrics = metric_set(rmse, mae, rsq),
+    control = control_race(save_pred = FALSE, verbose_elim = FALSE)
+  )
+  
+  # 최적 파라미터 추출
+  best_p <- select_best(target_tune_res, metric = "rmse")
+  
+  # 최종 모델 학습 및 검증
+  final_fit_res <- finalize_workflow(target_wf, best_p) %>% fit(data = df_train_sub)
+  
+  # 변수 중요도 추출 (상위 10개
+  vi_data <- final_fit_res %>%
+    extract_fit_parsnip() %>%
+    vi() %>%
+    slice_max(Importance, n = 10) %>%
+    mutate(vi_combined = paste0(Variable, "(", round(Importance, 4), ")")) %>%
+    summarise(top_features = paste(vi_combined, collapse = ", "))
+  
+  # 성능 지표 산출 및 파라미터 결합
+  metrics <- predict(final_fit_res, df_test_sub) %>%
+    bind_cols(df_test_sub %>% st_drop_geometry() %>% select(all_of(target))) %>%
+    metric_set(rmse, mae, rsq)(truth = !!sym(target), estimate = .pred) %>%
+    select(.metric, .estimate) %>%
+    pivot_wider(names_from = .metric, values_from = .estimate) %>%
+    mutate(
+      target_variable = target,
+      importance_top10 = vi_data$top_features) %>%
+    bind_cols(best_p %>% select(-.config))
+  
+  gc()
+  return(metrics)
+  
+}, .options = furrr::furrr_options(
+     seed = TRUE, 
+     globals = list(df_train_full = df_train_full, 
+                    df_test_full = df_test_full,
+                    id_vars_pool = id_vars_pool,
+                    all_targets = all_targets),
+     packages = c("tidymodels", "spatialsample", "finetune", "xgboost", "dplyr", "tidyr", "sf", "vip")
+   ))
+
+# 3. 결과 통합
+all_results_df <- bind_rows(tuning_results_list)
+
+summary_pm10 <- all_results_df %>% filter(target_variable %in% pm10_targets) %>% arrange(rmse)
+summary_pm25 <- all_results_df %>% filter(target_variable %in% pm25_targets) %>% arrange(rmse)
+```
+
+```{r}
+print("--- PM10 모델 성능 순위 ---")
+print(summary_pm10)
+
+print("--- PM25 모델 성능 순위 ---")
+print(summary_pm25)
+
+write.csv(summary_pm10, 
+          file = file.path(target_dir, "summary_performance_era5_pm10_1000m.csv"), 
+          row.names = FALSE)
+
+write.csv(summary_pm25, 
+          file = file.path(target_dir, "summary_performance_era5_pm25_1000m.csv"), 
+          row.names = FALSE)
+```
 
 
 
