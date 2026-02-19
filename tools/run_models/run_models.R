@@ -36,14 +36,15 @@ dtx22 <- dtx2[
 dt_pm10 <- dtx22[!is.na(PM10), !"PM25"]
 covars <- setdiff(names(dt_pm10), "PM10")
 dt_pm10[, (covars) := lapply(.SD, function(x) frollmean(x, 7, fill = mean(x, na.rm = TRUE))), .SDcols = covars]
+dt_pm10_2015 <- dt_pm10[year == 2015, ]
 
-pm10_split <- initial_time_split(dt_pm10, prop = 0.8)
+pm10_split <- initial_time_split(dt_pm10_2015, prop = 0.8)
 train_data <- training(pm10_split)
 test_data <- testing(pm10_split)
 
 pm10_mod <- boost_tree(
   mtry = tune(),
-  trees = 1000,
+  trees = 3000,
   learn_rate = tune(),
   min_n = tune(),
   tree_depth = tune(),
