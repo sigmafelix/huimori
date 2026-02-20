@@ -15,7 +15,8 @@ dt <- arrow::read_parquet(file.path(basepath, filename))
 # stage 2: dynamic variables
 dtx <- dt[, !"geometry", with = FALSE]
 
-dtx2 <- dtx[, .(PM10, PM25, weekday, is_weekend, d_road, dsm, dem, mtpi, mtpi_1km, lc_CRP, lc_FST, lc_WET, lc_IMP, lc_WTR, weekday)]
+# subset year less than or equal to 2012
+dtx2 <- dtx[year <= 2012, .(PM10, PM25, weekday, is_weekend, d_road, dsm, dem, mtpi, mtpi_1km, lc_CRP, lc_FST, lc_WET, lc_IMP, lc_WTR, weekday)]
 
 # binarize weekday
 dtx22 <- dtx2[
@@ -33,12 +34,12 @@ dtx22 <- dtx2[
 ]
 
 # 1. PM10 model
-dt_pm10 <- dtx22[!is.na(PM10), !"PM25"]
+dt_pm10 <- dtx22[!is.na(PM10) & year <= 2012, !"PM25"]
 covars <- setdiff(names(dt_pm10), "PM10")
 dt_pm10[, (covars) := lapply(.SD, function(x) frollmean(x, 7, fill = mean(x, na.rm = TRUE))), .SDcols = covars]
-dt_pm10_2015 <- dt_pm10[year == 2015, ]
+# dt_pm10 <- dt_pm10[year == 2015, ]
 
-pm10_split <- initial_time_split(dt_pm10_2015, prop = 0.8)
+pm10_split <- initial_time_split(dt_pm10, prop = 0.8)
 train_data <- training(pm10_split)
 test_data <- testing(pm10_split)
 
@@ -46,8 +47,9 @@ pm10_mod <- boost_tree(
   mtry = tune(),
   trees = 3000,
   learn_rate = tune(),
-  min_n = tune(),
+  min_n = 5,
   tree_depth = tune(),
+  loss_reduction = tune()
 ) %>%
   set_engine("xgboost") %>%
   set_mode("regression")
@@ -64,6 +66,6 @@ train_cv <- vfold_cv(train_data, v = 10)
 pm10_fitted <- finetune::tune_sim_anneal(
   pm10_workflow,
   resamples = train_cv,
-  metrics = metric_set(rmse, rsq),
+  metrics = metric_set(rmse, mae, rsq),
   control = control_sim_anneal(save_pred = TRUE)
 )
