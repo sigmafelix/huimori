@@ -8,10 +8,10 @@ basepath <- file.path(Sys.getenv("HOME"), "Documents")
 filename <- "dt_daily.parquet"
 
 default_config <- list(
-	year_max = 2012L,
-	seq_len = 48L,
-	batch_size = 64L,
-	epochs = 100L,
+	year_max = 2015L,
+	seq_len = 24L,
+	batch_size = 32L,
+	epochs = 200L,
 	learning_rate = 5e-4,
 	weight_decay = 1e-4,
 	d_model = 64L,
@@ -19,7 +19,7 @@ default_config <- list(
 	d_state = 64L,
 	n_layers = 3L,
 	conv_kernel = 3L,
-	dropout = 0.1,
+	dropout = 0.5,
 	train_prop = 0.8,
 	min_obs_per_target = 365L,
 	save_artifacts = TRUE,
@@ -579,4 +579,4 @@ run_experiment <- function(chosen_tmsid2 = NULL, cfg = default_config) {
 # result <- run_experiment(chosen_tmsid2 = 111123456)
 # result <- run_experiment()  # auto-select TMSID2 with enough PM10/PM25 data
 # loaded <- load_model_bundle(result$artifacts$checkpoint_pm10, device = default_config$device)
-result <- run_experiment(chosen_tmsid2 = "111142A")
+result <- run_experiment(chosen_tmsid2 = "735141B")
