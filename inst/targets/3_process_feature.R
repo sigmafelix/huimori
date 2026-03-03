@@ -228,6 +228,96 @@ list_process_site <-
       command = nanoparquet::read_parquet(chr_asos_file)
     ),
     targets::tar_target(
+      name = df_feat_correct_wind_daily,
+      command = {
+        points_use <- sf_monitors_correct |>
+          dplyr::filter(!sf::st_is_empty(geometry))
+        start_date <- min(dt_measurements$date)
+        end_date <- max(dt_measurements$date)
+
+        gee_extract_daily_wind(
+          points_sf = points_use,
+          start_date = start_date,
+          end_date = end_date,
+          buffer_m = 250,
+          scale = 1000
+        )
+      }
+    ),
+    targets::tar_target(
+      name = df_feat_correct_wind_annual,
+      command = {
+        df_feat_correct_wind_daily |>
+          dplyr::mutate(year = lubridate::year(date)) |>
+          dplyr::group_by(TMSID, TMSID2, year) |>
+          dplyr::summarize(
+            wind_speed_10m = mean(wind_speed_10m, na.rm = TRUE),
+            wind_dir_deg = mean(wind_dir_deg, na.rm = TRUE),
+            .groups = "drop"
+          )
+      }
+    ),
+    targets::tar_target(
+      name = df_feat_correct_building_density,
+      command = {
+        points_use <- sf_monitors_correct |>
+          dplyr::filter(!sf::st_is_empty(geometry))
+        yrs <- sort(unique(points_use$year))
+
+        gee_extract_building_density(
+          points_sf = points_use,
+          years = yrs,
+          buffer_m = 100,
+          scale = 30
+        )
+      }
+    ),
+    targets::tar_target(
+      name = df_feat_incorrect_wind_daily,
+      command = {
+        points_use <- sf_monitors_incorrect |>
+          dplyr::filter(!sf::st_is_empty(geometry))
+        start_date <- min(dt_measurements$date)
+        end_date <- max(dt_measurements$date)
+
+        gee_extract_daily_wind(
+          points_sf = points_use,
+          start_date = start_date,
+          end_date = end_date,
+          buffer_m = 250,
+          scale = 1000
+        )
+      }
+    ),
+    targets::tar_target(
+      name = df_feat_incorrect_wind_annual,
+      command = {
+        df_feat_incorrect_wind_daily |>
+          dplyr::mutate(year = lubridate::year(date)) |>
+          dplyr::group_by(TMSID, TMSID2, year) |>
+          dplyr::summarize(
+            wind_speed_10m = mean(wind_speed_10m, na.rm = TRUE),
+            wind_dir_deg = mean(wind_dir_deg, na.rm = TRUE),
+            .groups = "drop"
+          )
+      }
+    ),
+    targets::tar_target(
+      name = df_feat_incorrect_building_density,
+      command = {
+        points_use <- sf_monitors_incorrect |>
+          dplyr::filter(!sf::st_is_empty(geometry))
+        yrs <- sort(unique(points_use$year))
+
+        gee_extract_building_density(
+          points_sf = points_use,
+          years = yrs,
+          buffer_m = 100,
+          scale = 30
+        )
+      }
+    ),
+    targets::tar_target(
       name = ras_landuse_freq,
       command = {
         # the last file should be fixed when years are branched
@@ -573,6 +663,14 @@ list_process_feature <-
           dplyr::bind_cols(
             df_feat_correct_landuse
           ) %>%
+          dplyr::left_join(
+            df_feat_correct_building_density,
+            by = c("TMSID", "TMSID2", "year")
+          ) %>%
+          dplyr::left_join(
+            df_feat_correct_wind_annual,
+            by = c("TMSID", "TMSID2", "year")
+          ) %>%
           dplyr::mutate(
             dsm = unlist(df_feat_correct_dsm),
             dem = unlist(df_feat_correct_dem),
@@ -585,6 +683,9 @@ list_process_feature <-
             dsm = as.numeric(dsm),
             dem = as.numeric(dem),
             mtpi = as.numeric(mtpi),
+            building_density = as.numeric(building_density),
+            wind_speed_10m = as.numeric(wind_speed_10m),
+            wind_dir_deg = as.numeric(wind_dir_deg),
             n_emittors_watershed =
               ifelse(
                 is.na(n_emittors_watershed), 0,
@@ -722,14 +823,25 @@ list_process_feature <-
           dplyr::bind_cols(
             df_feat_incorrect_landuse
           ) %>%
+          dplyr::left_join(
+            df_feat_incorrect_building_density,
+            by = c("TMSID", "TMSID2", "year")
+          ) %>%
+          dplyr::left_join(
+            df_feat_incorrect_wind_annual,
+            by = c("TMSID", "TMSID2", "year")
+          ) %>%
           dplyr::mutate(
             dsm = unlist(df_feat_incorrect_dsm),
-            dem = unlist(df_feat_incorrect_dem),
+            dem = unlist(df_feat_incorrect_dem)
           ) %>%
           dplyr::mutate(
             d_road = as.numeric(d_road) / 1000,
             dsm = as.numeric(dsm),
             dem = as.numeric(dem),
+            building_density = as.numeric(building_density),
+            wind_speed_10m = as.numeric(wind_speed_10m),
+            wind_dir_deg = as.numeric(wind_dir_deg),
             n_emittors_watershed = unlist(df_feat_correct_emittors$n_emittors_watershed),
             mtpi = unlist(df_feat_incorrect_mtpi),
             mtpi_1km = unlist(df_feat_incorrect_mtpi_1km)

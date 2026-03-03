@@ -1,0 +1,78 @@
+#
+library(pacman)
+p_load(tidyverse, tidymodels, xgboost, nanoparquet, sf, data.table, finetune, lubridate)
+
+# path
+basepath <- file.path(Sys.getenv("HOME"), "Documents")
+filename <- "dt_daily.parquet"
+
+
+# read
+dt <- arrow::read_parquet(file.path(basepath, filename))
+
+# two-stage model
+# stage 1: static variables
+# stage 2: dynamic variables
+dtx <- dt[, !"geometry", with = FALSE]
+
+# subset year less than or equal to 2012
+dtx2 <- dtx[year >= 2022, .(season = sin(2 * pi * as.integer(strftime(date, format = "%j")) / 365.25), PM10, PM25, weekday, is_weekend, d_road, dsm, dem, mtpi, mtpi_1km, lc_CRP, lc_FST, lc_WET, lc_IMP, lc_WTR, weekday)]
+
+# binarize weekday
+dtx22 <- dtx2[
+  ,
+  .(
+    PM10 = log(PM10 + 0.1), PM25 = log(PM25 + 0.1), season, is_weekend, d_road, dsm, dem, mtpi, mtpi_1km, lc_CRP, lc_FST, lc_WET, lc_IMP, lc_WTR,
+    weekday_mon = ifelse(weekday == 1, 1, 0),
+    weekday_tue = ifelse(weekday == 2, 1, 0),
+    weekday_wed = ifelse(weekday == 3, 1, 0),
+    weekday_thu = ifelse(weekday == 4, 1, 0),
+    weekday_fri = ifelse(weekday == 5, 1, 0),
+    weekday_sat = ifelse(weekday == 6, 1, 0),
+    weekday_sun = ifelse(weekday == 7, 1, 0),
+    diff_dsm_dem = dsm - dem
+  )
+]
+
+# 1. PM10 model
+dt_pm10 <- dtx22[!is.na(PM10), !"PM25"]
+covars <- setdiff(names(dt_pm10), "PM10")
+dt_pm10[, (covars) := lapply(.SD, function(x) frollmean(x, 7, fill = mean(x, na.rm = TRUE))), .SDcols = covars]
+# dt_pm10 <- dt_pm10[year == 2015, ]
+
+pm10_split <- initial_time_split(dt_pm10, prop = 0.8)
+train_data <- training(pm10_split)
+test_data <- testing(pm10_split)
+
+pm10_mod <- boost_tree(
+  mtry = 7,
+  trees = 2000,
+  learn_rate = tune(),
+  min_n = 5,
+  tree_depth = tune(),
+  loss_reduction = tune()
+) %>%
+  set_engine("xgboost") %>%
+  set_mode("regression")
+
+# add data and formula
+pm10_workflow <-
+  workflow() %>%
+  add_model(pm10_mod) %>%
+  add_formula(PM10 ~ .)
+
+train_cv <- vfold_cv(train_data, v = 5)
+
+# fit xgboost
+pm10_fitted <- finetune::tune_race_anova(
+  pm10_workflow,
+  resamples = train_cv,
+  metrics = metric_set(rmse, mae, rsq),
+  control = control_race(save_pred = TRUE, verbose = TRUE)
+)
+
+# recover logarithm in predicted values
+pm10_pred_recovered <- exp(pm10_fitted$.predictions[[1]]$.pred) - 0.1
+pm10_orig_recovered <- exp(pm10_fitted$.predictions[[1]]$PM10) - 0.1
+
+rmse_vec(estimate = pm10_pred_recovered, truth = pm10_orig_recovered)
