@@ -31,14 +31,14 @@ default_st_config <- list(
     n_mamba_layers      = 3L,
     conv_kernel         = 3L,
     n_cross_attn_layers = 2L,
-    n_heads             = 2L,
-    dropout             = 0.5,
+    n_heads             = 4L,
+    dropout             = 0.3,
 
     # Training
     batch_size          = 64L,
     max_epochs          = 300L,
-    learning_rate       = 3e-4,
-    weight_decay        = 1e-4,
+    learning_rate       = 5e-3,
+    weight_decay        = 1e-2,
     patience            = 15L,
     min_delta           = 1e-5,
     grad_clip_norm      = 1.0,
@@ -52,8 +52,8 @@ default_st_config <- list(
     cache_dataset_tensors = NULL,
 
     # Split proportions (train / val / test)
-    train_prop          = 0.8,
-    val_prop            = 0.15,
+    train_prop          = 0.6,
+    val_prop            = 0.3,
 
     # I/O
     basepath            = file.path(Sys.getenv("HOME"), "Documents"),
@@ -627,6 +627,12 @@ spatial_rel_encoder <- nn_module(
 spatial_cross_attention <- nn_module(
     "spatial_cross_attention",
     initialize = function(d_model, n_heads, dropout) {
+        if ((d_model %% n_heads) != 0L) {
+            stop(sprintf(
+                "Invalid attention config: d_model (%d) must be divisible by n_heads (%d).",
+                d_model, n_heads
+            ))
+        }
         self$n_heads <- n_heads
         self$head_dim <- as.integer(d_model / n_heads)
         self$scale <- 1.0 / sqrt(self$head_dim)
@@ -827,6 +833,9 @@ train_model <- function(model, train_dl, val_dl, cfg) {
         model$train()
         train_loss_sum <- 0
         train_batches <- 0L
+        train_se_sum <- 0
+        train_ae_sum <- 0
+        train_n_obs <- 0
 
         coro::loop(for (batch in train_dl) {
             x_target <- batch$x_target$to(device = device)
@@ -838,15 +847,20 @@ train_model <- function(model, train_dl, val_dl, cfg) {
 
             optimizer$zero_grad()
             if (use_amp) {
-                loss <- with_autocast(
+                out <- with_autocast(
                     {
                         pred <- model(x_target, x_static, x_neighbors, x_rel)
-                        masked_mse_loss(pred, y, mask)
+                        list(
+                            pred = pred,
+                            loss = masked_mse_loss(pred, y, mask)
+                        )
                     },
                     device_type = "cuda",
                     dtype = amp_dtype,
                     enabled = TRUE
                 )
+                pred <- out$pred
+                loss <- out$loss
                 scaler$scale(loss)$backward()
                 scaler$unscale_(optimizer)
                 nn_utils_clip_grad_norm_(model$parameters, max_norm = cfg$grad_clip_norm)
@@ -862,12 +876,20 @@ train_model <- function(model, train_dl, val_dl, cfg) {
 
             train_loss_sum <- train_loss_sum + loss$item()
             train_batches <- train_batches + 1L
+            mask_f <- mask$to(dtype = torch_float32())
+            err <- (pred - y) * mask_f
+            train_se_sum <- train_se_sum + ((err^2)$sum())$item()
+            train_ae_sum <- train_ae_sum + ((err$abs())$sum())$item()
+            train_n_obs <- train_n_obs + (mask_f$sum())$item()
         })
 
         # --- Validate ---
         model$eval()
         val_loss_sum <- 0
         val_batches <- 0L
+        val_se_sum <- 0
+        val_ae_sum <- 0
+        val_n_obs <- 0
 
         with_no_grad({
             coro::loop(for (batch in val_dl) {
@@ -879,26 +901,40 @@ train_model <- function(model, train_dl, val_dl, cfg) {
                 mask <- batch$target_mask$to(device = device)
 
                 if (use_amp) {
-                    loss <- with_autocast(
+                    out <- with_autocast(
                         {
                             pred <- model(x_target, x_static, x_neighbors, x_rel)
-                            masked_mse_loss(pred, y, mask)
+                            list(
+                                pred = pred,
+                                loss = masked_mse_loss(pred, y, mask)
+                            )
                         },
                         device_type = "cuda",
                         dtype = amp_dtype,
                         enabled = TRUE
                     )
+                    pred <- out$pred
+                    loss <- out$loss
                 } else {
                     pred <- model(x_target, x_static, x_neighbors, x_rel)
                     loss <- masked_mse_loss(pred, y, mask)
                 }
                 val_loss_sum <- val_loss_sum + loss$item()
                 val_batches <- val_batches + 1L
+                mask_f <- mask$to(dtype = torch_float32())
+                err <- (pred - y) * mask_f
+                val_se_sum <- val_se_sum + ((err^2)$sum())$item()
+                val_ae_sum <- val_ae_sum + ((err$abs())$sum())$item()
+                val_n_obs <- val_n_obs + (mask_f$sum())$item()
             })
         })
 
         mean_train <- train_loss_sum / max(train_batches, 1L)
         mean_val <- val_loss_sum / max(val_batches, 1L)
+        train_rmse <- sqrt(train_se_sum / max(train_n_obs, 1))
+        train_mae <- train_ae_sum / max(train_n_obs, 1)
+        val_rmse <- sqrt(val_se_sum / max(val_n_obs, 1))
+        val_mae <- val_ae_sum / max(val_n_obs, 1)
 
         # LR scheduler step
         scheduler$step(mean_val)
@@ -914,8 +950,8 @@ train_model <- function(model, train_dl, val_dl, cfg) {
 
         if (epoch %% 5L == 0L || epoch == 1L || epochs_no_improve >= cfg$patience) {
             cat(sprintf(
-                "[Epoch %03d] train_loss=%.5f | val_loss=%.5f | best=%.5f | patience=%d/%d\n",
-                epoch, mean_train, mean_val, best_val_loss,
+                "[Epoch %03d] train_loss=%.5f rmse=%.4f mae=%.4f | val_loss=%.5f rmse=%.4f mae=%.4f | best=%.5f | patience=%d/%d\n",
+                epoch, mean_train, train_rmse, train_mae, mean_val, val_rmse, val_mae, best_val_loss,
                 epochs_no_improve, cfg$patience
             ))
         }
@@ -1043,7 +1079,25 @@ load_st_model_bundle <- function(file_path, device = NULL) {
 
 run_st_experiment <- function(cfg = default_st_config,
                               subset_stations = NULL,
-                              subset_max_date = NULL) {
+                              subset_max_date = NULL,
+                              subset_date_range = NULL) {
+    report_pm_ranges <- function(dt_in, label = "Input") {
+        pm10_min <- suppressWarnings(min(dt_in$PM10, na.rm = TRUE))
+        pm10_max <- suppressWarnings(max(dt_in$PM10, na.rm = TRUE))
+        pm25_min <- suppressWarnings(min(dt_in$PM25, na.rm = TRUE))
+        pm25_max <- suppressWarnings(max(dt_in$PM25, na.rm = TRUE))
+
+        if (!is.finite(pm10_min)) pm10_min <- NA_real_
+        if (!is.finite(pm10_max)) pm10_max <- NA_real_
+        if (!is.finite(pm25_min)) pm25_min <- NA_real_
+        if (!is.finite(pm25_max)) pm25_max <- NA_real_
+
+        cat(sprintf(
+            "%s PM ranges | PM10: [%.3f, %.3f] | PM2.5: [%.3f, %.3f]\n",
+            label, pm10_min, pm10_max, pm25_min, pm25_max
+        ))
+    }
+
     cfg_num_workers <- suppressWarnings(as.integer(cfg$num_workers))
     if (length(cfg_num_workers) != 1L || is.na(cfg_num_workers)) {
         cfg_num_workers <- 0L
@@ -1062,6 +1116,13 @@ run_st_experiment <- function(cfg = default_st_config,
         cat("Disabling dataset tensor cache because num_workers > 0 (worker-safe mode).\n")
         cfg$cache_dataset_tensors <- FALSE
     }
+    if ((as.integer(cfg$d_model) %% as.integer(cfg$n_heads)) != 0L) {
+        stop(sprintf(
+            "Invalid model config: d_model (%d) must be divisible by n_heads (%d). For d_model=%d, use n_heads such as 1, 2, 4, 8, 16, or %d.",
+            as.integer(cfg$d_model), as.integer(cfg$n_heads),
+            as.integer(cfg$d_model), as.integer(cfg$d_model)
+        ))
+    }
 
     # --- Load and prepare ---
     dt <- load_and_prepare_data(cfg)
@@ -1075,10 +1136,31 @@ run_st_experiment <- function(cfg = default_st_config,
         dt <- dt[TMSID2 %in% subset_stations]
         cat(sprintf("Subset: %d stations\n", length(subset_stations)))
     }
-    if (!is.null(subset_max_date)) {
+    if (!is.null(subset_date_range)) {
+        if (length(subset_date_range) == 1L) {
+            start_date <- as.Date(subset_date_range[[1]])
+            end_date <- as.Date(subset_date_range[[1]])
+        } else if (length(subset_date_range) >= 2L) {
+            start_date <- as.Date(subset_date_range[[1]])
+            end_date <- as.Date(subset_date_range[[2]])
+        } else {
+            stop("subset_date_range must have length 1 or 2.")
+        }
+        if (is.na(start_date) || is.na(end_date)) {
+            stop("subset_date_range contains invalid date(s).")
+        }
+        if (start_date > end_date) {
+            tmp <- start_date
+            start_date <- end_date
+            end_date <- tmp
+        }
+        dt <- dt[date >= start_date & date <= end_date]
+        cat(sprintf("Subset: date range %s to %s\n", start_date, end_date))
+    } else if (!is.null(subset_max_date)) {
         dt <- dt[date <= as.Date(subset_max_date)]
         cat(sprintf("Subset: dates up to %s\n", subset_max_date))
     }
+    report_pm_ranges(dt, label = "Subsetted input")
 
     feat_sets <- define_feature_sets()
 
@@ -1093,6 +1175,7 @@ run_st_experiment <- function(cfg = default_st_config,
     ]
     dt <- dt[TMSID2 %in% good_stations]
     cat(sprintf("Stations after filtering: %d\n", length(good_stations)))
+    report_pm_ranges(dt, label = "Filtered input")
 
     if (length(good_stations) < cfg$K_neighbors + 1L) {
         stop(sprintf(
@@ -1266,10 +1349,10 @@ if (TRUE) {#interactive() && identical(Sys.getenv("HUIMORI_RUN_ST_EXAMPLE"), "1"
     test_cfg <- default_st_config
     test_cfg$max_epochs <- 20L
     test_cfg$patience <- 5L
-    test_cfg$batch_size   <- 128L
+    test_cfg$batch_size   <- 64L
     test_cfg$K_neighbors  <- 5L
     # test_cfg$seq_len      <- 10L
-    # test_cfg$min_obs_per_station <- 30L
+    test_cfg$min_obs_per_station <- 72L
     # test_cfg$save_artifacts <- FALSE
     test_cfg$num_workers <- 0L  # use this with cache_dataset_tensors = TRUE
     test_cfg$cache_dataset_tensors <- TRUE
@@ -1277,7 +1360,7 @@ if (TRUE) {#interactive() && identical(Sys.getenv("HUIMORI_RUN_ST_EXAMPLE"), "1"
 
     result <- run_st_experiment(
         cfg = test_cfg,
-        subset_stations = 20,
-        subset_max_date = "2015-12-31"
+        subset_stations = 200,
+        subset_date_range = c("2017-01-01", "2017-12-31")
     )
 }
