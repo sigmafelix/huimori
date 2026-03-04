@@ -25,9 +25,9 @@ default_st_config <- list(
     min_obs_per_station = 100L,
 
     # Model
-    d_model             = 64L,
-    d_inner             = 128L,
-    d_state             = 64L,
+    d_model             = 32L,
+    d_inner             = 32L,
+    d_state             = 32L,
     n_mamba_layers      = 3L,
     conv_kernel         = 3L,
     n_cross_attn_layers = 2L,
@@ -44,10 +44,16 @@ default_st_config <- list(
     grad_clip_norm      = 1.0,
     lr_factor           = 0.5,
     lr_patience         = 5L,
+    use_amp             = TRUE,
+    amp_dtype           = "float16",
+    use_vectorized_ssm  = TRUE,
+    num_workers         = 2L,
+    pin_memory          = TRUE,
+    cache_dataset_tensors = NULL,
 
     # Split proportions (train / val / test)
     train_prop          = 0.8,
-    val_prop            = 0.1,
+    val_prop            = 0.15,
 
     # I/O
     basepath            = file.path(Sys.getenv("HOME"), "Documents"),
@@ -56,6 +62,14 @@ default_st_config <- list(
     artifact_dir        = file.path("tools", "run_models", "artifacts_st"),
     device              = if (cuda_is_available()) torch_device("cuda") else torch_device("cpu")
 )
+
+resolve_amp_dtype <- function(dtype_name) {
+    if (identical(dtype_name, "bfloat16")) {
+        torch_bfloat16()
+    } else {
+        torch_float16()
+    }
+}
 
 ensure_dir <- function(path) {
     if (!dir.exists(path)) dir.create(path, recursive = TRUE, showWarnings = FALSE)
@@ -260,12 +274,26 @@ split_by_time <- function(dt, train_prop, val_prop) {
 spatiotemporal_dataset <- dataset(
     name = "spatiotemporal_dataset",
     initialize = function(dt, nn_info, feat_sets, seq_len, cfg) {
+        cfg_num_workers <- suppressWarnings(as.integer(cfg$num_workers))
+        if (length(cfg_num_workers) != 1L || is.na(cfg_num_workers)) {
+            cfg_num_workers <- 0L
+        }
+        cfg_cache_tensors <- cfg$cache_dataset_tensors
+        if (length(cfg_cache_tensors) != 1L) cfg_cache_tensors <- NULL
+
         self$seq_len <- seq_len
         self$K <- nn_info$K
         self$nn_info <- nn_info
         self$target_feats <- feat_sets$target_temporal
         self$neighbor_feats <- feat_sets$neighbor_temporal
         self$static_feats <- feat_sets$static_covars
+        self$cache_tensors <- isTRUE(cfg_cache_tensors)
+        if (is.null(cfg_cache_tensors)) {
+            self$cache_tensors <- cfg_num_workers == 0L
+        }
+        if (self$cache_tensors && cfg_num_workers > 0L) {
+            self$cache_tensors <- FALSE
+        }
 
         station_locs <- nn_info$station_locs
         station_ids <- station_locs$TMSID2
@@ -275,6 +303,7 @@ spatiotemporal_dataset <- dataset(
         self$station_targets <- list()
         self$station_dates <- list()
         self$station_idx_map <- list()
+        self$x_rel_cache <- vector("list", length = nrow(station_locs))
 
         for (idx in seq_along(station_ids)) {
             sid <- station_ids[idx]
@@ -302,16 +331,39 @@ spatiotemporal_dataset <- dataset(
             pm10 <- as.numeric(sdt$PM10)
             pm25 <- as.numeric(sdt$PM25)
 
-            self$station_data[[as.character(idx)]] <- list(
-                nb_mat     = mat_nb,
-                tgt_mat    = mat_tgt,
-                static_vec = static_vec,
-                pm10       = pm10,
-                pm25       = pm25,
-                n_rows     = nrow(sdt)
+            pm10_mask <- !is.na(pm10)
+            pm25_mask <- !is.na(pm25)
+            pm10[!pm10_mask] <- 0
+            pm25[!pm25_mask] <- 0
+
+            station_entry <- list(
+                nb_mat       = mat_nb,
+                tgt_mat      = mat_tgt,
+                static_vec   = static_vec,
+                pm10         = pm10,
+                pm25         = pm25,
+                pm10_mask    = pm10_mask,
+                pm25_mask    = pm25_mask,
+                n_rows       = nrow(sdt)
             )
+            if (self$cache_tensors) {
+                station_entry$nb_tensor <- torch_tensor(mat_nb, dtype = torch_float32())
+                station_entry$tgt_tensor <- torch_tensor(mat_tgt, dtype = torch_float32())
+                station_entry$static_tensor <- torch_tensor(static_vec, dtype = torch_float32())
+                station_entry$pm10_tensor <- torch_tensor(pm10, dtype = torch_float32())
+                station_entry$pm25_tensor <- torch_tensor(pm25, dtype = torch_float32())
+                station_entry$pm10_mask_tensor <- torch_tensor(pm10_mask, dtype = torch_bool())
+                station_entry$pm25_mask_tensor <- torch_tensor(pm25_mask, dtype = torch_bool())
+            }
+            self$station_data[[as.character(idx)]] <- station_entry
             self$station_dates[[as.character(idx)]] <- sdt$date
             self$station_idx_map[[sid]] <- idx
+            x_rel_i <- compute_spatial_rel_features(self$nn_info, idx)
+            if (self$cache_tensors) {
+                self$x_rel_cache[[idx]] <- torch_tensor(x_rel_i, dtype = torch_float32())
+            } else {
+                self$x_rel_cache[[idx]] <- x_rel_i
+            }
         }
 
         # Enumerate valid (station_idx, time_idx) samples
@@ -373,16 +425,19 @@ spatiotemporal_dataset <- dataset(
         sdata <- self$station_data[[si]]
 
         # Target temporal sequence: [seq_len, n_target_feats]
-        x_target <- sdata$tgt_mat[t_start:t_end, , drop = FALSE]
-
-        # Static features: [n_static_feats]
-        x_static <- sdata$static_vec
+        if (self$cache_tensors) {
+            x_target <- sdata$tgt_tensor[t_start:t_end, ]
+            x_static <- sdata$static_tensor
+        } else {
+            x_target <- torch_tensor(sdata$tgt_mat[t_start:t_end, , drop = FALSE], dtype = torch_float32())
+            x_static <- torch_tensor(sdata$static_vec, dtype = torch_float32())
+        }
 
         # Neighbor temporal sequences: [K, seq_len, n_neighbor_feats]
         n_nb_feats <- ncol(self$station_data[[as.character(
             self$nn_info$nn_idx[s$station_idx, 1]
         )]]$nb_mat)
-        x_neighbors <- array(0, dim = c(self$K, self$seq_len, n_nb_feats))
+        x_neighbors <- torch_zeros(c(self$K, self$seq_len, n_nb_feats), dtype = torch_float32())
 
         for (k in seq_len(self$K)) {
             nb_idx <- self$nn_info$nn_idx[s$station_idx, k]
@@ -395,27 +450,45 @@ spatiotemporal_dataset <- dataset(
                 nb_t_start <- 1L
                 nb_t_end <- self$seq_len
             }
-            x_neighbors[k, , ] <- nb_data$nb_mat[nb_t_start:nb_t_end, , drop = FALSE]
+            if (self$cache_tensors) {
+                x_neighbors[k, , ] <- nb_data$nb_tensor[nb_t_start:nb_t_end, ]
+            } else {
+                x_neighbors[k, , ] <- torch_tensor(
+                    nb_data$nb_mat[nb_t_start:nb_t_end, , drop = FALSE],
+                    dtype = torch_float32()
+                )
+            }
         }
 
         # Spatial relation features: [K, 6]
-        x_rel <- compute_spatial_rel_features(self$nn_info, s$station_idx)
+        x_rel <- if (self$cache_tensors) {
+            self$x_rel_cache[[s$station_idx]]
+        } else {
+            torch_tensor(self$x_rel_cache[[s$station_idx]], dtype = torch_float32())
+        }
 
         # Targets: [2] (PM10, PM25) with mask
-        pm10 <- sdata$pm10[t_end]
-        pm25 <- sdata$pm25[t_end]
-        mask_pm10 <- !is.na(pm10)
-        mask_pm25 <- !is.na(pm25)
-        if (is.na(pm10)) pm10 <- 0
-        if (is.na(pm25)) pm25 <- 0
+        if (self$cache_tensors) {
+            y <- torch_stack(list(sdata$pm10_tensor[t_end], sdata$pm25_tensor[t_end]))
+            target_mask <- torch_stack(list(
+                sdata$pm10_mask_tensor[t_end],
+                sdata$pm25_mask_tensor[t_end]
+            ))
+        } else {
+            y <- torch_tensor(c(sdata$pm10[t_end], sdata$pm25[t_end]), dtype = torch_float32())
+            target_mask <- torch_tensor(
+                c(sdata$pm10_mask[t_end], sdata$pm25_mask[t_end]),
+                dtype = torch_bool()
+            )
+        }
 
         list(
-            x_target    = torch_tensor(x_target, dtype = torch_float32()),
-            x_static    = torch_tensor(x_static, dtype = torch_float32()),
-            x_neighbors = torch_tensor(x_neighbors, dtype = torch_float32()),
-            x_rel       = torch_tensor(x_rel, dtype = torch_float32()),
-            y           = torch_tensor(c(pm10, pm25), dtype = torch_float32()),
-            target_mask = torch_tensor(c(mask_pm10, mask_pm25), dtype = torch_bool())
+            x_target    = x_target,
+            x_static    = x_static,
+            x_neighbors = x_neighbors,
+            x_rel       = x_rel,
+            y           = y,
+            target_mask = target_mask
         )
     },
     .length = function() {
@@ -430,8 +503,10 @@ spatiotemporal_dataset <- dataset(
 # --- Mamba Block (reused from experiment_rnn.R) ---
 mamba_block <- nn_module(
     "mamba_block",
-    initialize = function(d_model, d_inner, d_state, conv_kernel = 3L, dropout = 0.1) {
+    initialize = function(d_model, d_inner, d_state, conv_kernel = 3L, dropout = 0.1,
+                          vectorized_ssm = TRUE) {
         self$d_inner <- d_inner
+        self$vectorized_ssm <- isTRUE(vectorized_ssm)
         self$norm <- nn_layer_norm(normalized_shape = d_model)
         self$in_proj <- nn_linear(d_model, d_inner * 2L)
         self$conv <- nn_conv1d(
@@ -470,18 +545,33 @@ mamba_block <- nn_module(
 
         ssm_in <- self$to_state(u)
 
-        state <- torch_zeros(c(b, self$A_log$size(1)), device = x$device)
         decay <- torch_exp(-torch_exp(self$A_log))
-        outs <- vector("list", s)
+        if (self$vectorized_ssm && exists("torch_einsum", where = asNamespace("torch"), inherits = FALSE)) {
+            # state[t] = sum_{i<=t} (decay^(t-i) * u[i] * B), fully vectorized on device.
+            time_idx <- torch_arange(
+                start = 0, end = as.integer(s - 1L),
+                device = x$device, dtype = torch_float32()
+            )
+            dt <- time_idx$unsqueeze(2) - time_idx$unsqueeze(1)  # [S, S]
+            causal <- (dt >= 0)$to(dtype = ssm_in$dtype)
+            dt <- dt$clamp(min = 0)$to(dtype = ssm_in$dtype)
 
-        for (t in seq_len(s)) {
-            u_t <- ssm_in[, t, ]
-            state <- state * decay + u_t * self$B
-            y_t <- state * self$C + u_t * self$D
-            outs[[t]] <- y_t$unsqueeze(2)
+            decay_grid <- torch_pow(decay$view(c(1, 1, -1)), dt$unsqueeze(-1))
+            kernel <- decay_grid * causal$unsqueeze(-1)  # [S, S, D]
+            state <- torch_einsum("bsd,std->btd", list(ssm_in, kernel))
+            state <- state * self$B$view(c(1, 1, -1))
+            y <- state * self$C$view(c(1, 1, -1)) + ssm_in * self$D$view(c(1, 1, -1))
+        } else {
+            state <- torch_zeros(c(b, self$A_log$size(1)), device = x$device)
+            outs <- vector("list", s)
+            for (t in seq_len(s)) {
+                u_t <- ssm_in[, t, ]
+                state <- state * decay + u_t * self$B
+                y_t <- state * self$C + u_t * self$D
+                outs[[t]] <- y_t$unsqueeze(2)
+            }
+            y <- torch_cat(outs, dim = 2)
         }
-
-        y <- torch_cat(outs, dim = 2)
         y <- self$from_state(y)
         y <- y * torch_sigmoid(g)
         y <- self$out_proj(y)
@@ -495,11 +585,14 @@ mamba_block <- nn_module(
 temporal_encoder <- nn_module(
     "temporal_encoder",
     initialize = function(input_dim, d_model, d_inner, d_state,
-                          n_layers, conv_kernel, dropout) {
+                          n_layers, conv_kernel, dropout, vectorized_ssm = TRUE) {
         self$embed <- nn_linear(input_dim, d_model)
         self$blocks <- nn_module_list(lapply(
             seq_len(n_layers),
-            function(i) mamba_block(d_model, d_inner, d_state, conv_kernel, dropout)
+            function(i) mamba_block(
+                d_model, d_inner, d_state, conv_kernel, dropout,
+                vectorized_ssm = vectorized_ssm
+            )
         ))
         self$norm <- nn_layer_norm(d_model)
     },
@@ -625,16 +718,17 @@ mamba_transformer_st <- nn_module(
                           n_cross_attn_layers = 2L,
                           n_heads = 4L,
                           dropout = 0.1,
-                          n_targets = 2L) {
+                          n_targets = 2L,
+                          vectorized_ssm = TRUE) {
         # Separate temporal encoders for target vs neighbors
         # (different input dims: target has no PM cols, neighbors have PM cols)
         self$target_encoder <- temporal_encoder(
             n_target_temporal_features, d_model, d_inner, d_state,
-            n_mamba_layers, conv_kernel, dropout
+            n_mamba_layers, conv_kernel, dropout, vectorized_ssm = vectorized_ssm
         )
         self$neighbor_encoder <- temporal_encoder(
             n_neighbor_temporal_features, d_model, d_inner, d_state,
-            n_mamba_layers, conv_kernel, dropout
+            n_mamba_layers, conv_kernel, dropout, vectorized_ssm = vectorized_ssm
         )
 
         self$spatial_rel_enc <- spatial_rel_encoder(n_spatial_rel_features, d_model)
@@ -723,11 +817,16 @@ train_model <- function(model, train_dl, val_dl, cfg) {
     best_val_loss <- Inf
     best_state <- NULL
     epochs_no_improve <- 0L
+    use_cuda <- grepl("cuda", as.character(device), fixed = TRUE)
+    use_amp <- isTRUE(cfg$use_amp) && use_cuda
+    amp_dtype <- resolve_amp_dtype(cfg$amp_dtype)
+    scaler <- if (use_amp) cuda_amp_grad_scaler(enabled = TRUE) else NULL
 
     for (epoch in seq_len(cfg$max_epochs)) {
         # --- Train ---
         model$train()
-        train_losses <- c()
+        train_loss_sum <- 0
+        train_batches <- 0L
 
         coro::loop(for (batch in train_dl) {
             x_target <- batch$x_target$to(device = device)
@@ -738,19 +837,37 @@ train_model <- function(model, train_dl, val_dl, cfg) {
             mask <- batch$target_mask$to(device = device)
 
             optimizer$zero_grad()
-            pred <- model(x_target, x_static, x_neighbors, x_rel)
-            loss <- masked_mse_loss(pred, y, mask)
-            loss$backward()
+            if (use_amp) {
+                loss <- with_autocast(
+                    {
+                        pred <- model(x_target, x_static, x_neighbors, x_rel)
+                        masked_mse_loss(pred, y, mask)
+                    },
+                    device_type = "cuda",
+                    dtype = amp_dtype,
+                    enabled = TRUE
+                )
+                scaler$scale(loss)$backward()
+                scaler$unscale_(optimizer)
+                nn_utils_clip_grad_norm_(model$parameters, max_norm = cfg$grad_clip_norm)
+                scaler$step(optimizer)
+                scaler$update()
+            } else {
+                pred <- model(x_target, x_static, x_neighbors, x_rel)
+                loss <- masked_mse_loss(pred, y, mask)
+                loss$backward()
+                nn_utils_clip_grad_norm_(model$parameters, max_norm = cfg$grad_clip_norm)
+                optimizer$step()
+            }
 
-            nn_utils_clip_grad_norm_(model$parameters, max_norm = cfg$grad_clip_norm)
-            optimizer$step()
-
-            train_losses <- c(train_losses, loss$item())
+            train_loss_sum <- train_loss_sum + loss$item()
+            train_batches <- train_batches + 1L
         })
 
         # --- Validate ---
         model$eval()
-        val_losses <- c()
+        val_loss_sum <- 0
+        val_batches <- 0L
 
         with_no_grad({
             coro::loop(for (batch in val_dl) {
@@ -761,14 +878,27 @@ train_model <- function(model, train_dl, val_dl, cfg) {
                 y <- batch$y$to(device = device)
                 mask <- batch$target_mask$to(device = device)
 
-                pred <- model(x_target, x_static, x_neighbors, x_rel)
-                loss <- masked_mse_loss(pred, y, mask)
-                val_losses <- c(val_losses, loss$item())
+                if (use_amp) {
+                    loss <- with_autocast(
+                        {
+                            pred <- model(x_target, x_static, x_neighbors, x_rel)
+                            masked_mse_loss(pred, y, mask)
+                        },
+                        device_type = "cuda",
+                        dtype = amp_dtype,
+                        enabled = TRUE
+                    )
+                } else {
+                    pred <- model(x_target, x_static, x_neighbors, x_rel)
+                    loss <- masked_mse_loss(pred, y, mask)
+                }
+                val_loss_sum <- val_loss_sum + loss$item()
+                val_batches <- val_batches + 1L
             })
         })
 
-        mean_train <- mean(train_losses)
-        mean_val <- mean(val_losses)
+        mean_train <- train_loss_sum / max(train_batches, 1L)
+        mean_val <- val_loss_sum / max(val_batches, 1L)
 
         # LR scheduler step
         scheduler$step(mean_val)
@@ -885,6 +1015,7 @@ load_st_model_bundle <- function(file_path, device = NULL) {
     bundle <- torch_load(file_path)
     hp <- bundle$model_hparams
 
+    vectorized_ssm_hp <- if (!is.null(hp$vectorized_ssm)) isTRUE(hp$vectorized_ssm) else TRUE
     model <- mamba_transformer_st(
         n_target_temporal_features   = as.integer(hp$n_target_temporal_features),
         n_neighbor_temporal_features = as.integer(hp$n_neighbor_temporal_features),
@@ -897,7 +1028,8 @@ load_st_model_bundle <- function(file_path, device = NULL) {
         conv_kernel                  = as.integer(hp$conv_kernel),
         n_cross_attn_layers          = as.integer(hp$n_cross_attn_layers),
         n_heads                      = as.integer(hp$n_heads),
-        dropout                      = as.numeric(hp$dropout)
+        dropout                      = as.numeric(hp$dropout),
+        vectorized_ssm               = vectorized_ssm_hp
     )
     model$load_state_dict(bundle$model_state)
     model <- model$to(device = device)
@@ -912,6 +1044,25 @@ load_st_model_bundle <- function(file_path, device = NULL) {
 run_st_experiment <- function(cfg = default_st_config,
                               subset_stations = NULL,
                               subset_max_date = NULL) {
+    cfg_num_workers <- suppressWarnings(as.integer(cfg$num_workers))
+    if (length(cfg_num_workers) != 1L || is.na(cfg_num_workers)) {
+        cfg_num_workers <- 0L
+        cfg$num_workers <- 0L
+    }
+    cfg_cache_tensors <- cfg$cache_dataset_tensors
+    if (length(cfg_cache_tensors) != 1L) {
+        cfg_cache_tensors <- NULL
+        cfg$cache_dataset_tensors <- NULL
+    }
+
+    if (is.null(cfg_cache_tensors)) {
+        cfg$cache_dataset_tensors <- cfg_num_workers == 0L
+    }
+    if (isTRUE(cfg$cache_dataset_tensors) && cfg_num_workers > 0L) {
+        cat("Disabling dataset tensor cache because num_workers > 0 (worker-safe mode).\n")
+        cfg$cache_dataset_tensors <- FALSE
+    }
+
     # --- Load and prepare ---
     dt <- load_and_prepare_data(cfg)
 
@@ -985,9 +1136,33 @@ run_st_experiment <- function(cfg = default_st_config,
         stop("Not enough valid samples. Try fewer K neighbors or a longer date range.")
     }
 
-    train_dl <- dataloader(train_ds, batch_size = cfg$batch_size, shuffle = TRUE, drop_last = TRUE)
-    val_dl <- dataloader(val_ds, batch_size = cfg$batch_size, shuffle = FALSE, drop_last = FALSE)
-    test_dl <- dataloader(test_ds, batch_size = cfg$batch_size, shuffle = FALSE, drop_last = FALSE)
+    dl_num_workers <- as.integer(cfg$num_workers)
+    dl_pin_memory <- isTRUE(cfg$pin_memory) && grepl("cuda", as.character(cfg$device), fixed = TRUE)
+
+    train_dl <- dataloader(
+        train_ds,
+        batch_size = cfg$batch_size,
+        shuffle = TRUE,
+        drop_last = TRUE,
+        num_workers = dl_num_workers,
+        pin_memory = dl_pin_memory
+    )
+    val_dl <- dataloader(
+        val_ds,
+        batch_size = cfg$batch_size,
+        shuffle = FALSE,
+        drop_last = FALSE,
+        num_workers = dl_num_workers,
+        pin_memory = dl_pin_memory
+    )
+    test_dl <- dataloader(
+        test_ds,
+        batch_size = cfg$batch_size,
+        shuffle = FALSE,
+        drop_last = FALSE,
+        num_workers = dl_num_workers,
+        pin_memory = dl_pin_memory
+    )
 
     # --- Determine feature dimensions from first batch ---
     first_batch <- train_ds$.getitem(1)
@@ -1013,7 +1188,8 @@ run_st_experiment <- function(cfg = default_st_config,
         conv_kernel                  = cfg$conv_kernel,
         n_cross_attn_layers          = cfg$n_cross_attn_layers,
         n_heads                      = cfg$n_heads,
-        dropout                      = cfg$dropout
+        dropout                      = cfg$dropout,
+        vectorized_ssm               = cfg$use_vectorized_ssm
     )
 
     n_params <- sum(sapply(model$parameters, function(p) p$numel()))
@@ -1055,7 +1231,8 @@ run_st_experiment <- function(cfg = default_st_config,
             conv_kernel = cfg$conv_kernel,
             n_cross_attn_layers = cfg$n_cross_attn_layers,
             n_heads = cfg$n_heads,
-            dropout = cfg$dropout
+            dropout = cfg$dropout,
+            vectorized_ssm = cfg$use_vectorized_ssm
         )
 
         nn_info_summary <- list(
@@ -1082,21 +1259,25 @@ run_st_experiment <- function(cfg = default_st_config,
 }
 
 # ============================================================================
-# Small-Subset Test Run
+# Optional Small-Subset Test Run
 # ============================================================================
-# Uncomment the lines below to test with a small subset:
-#
-test_cfg <- default_st_config
-test_cfg$max_epochs <- 20L
-test_cfg$patience <- 5L
-# test_cfg$batch_size   <- 16L
-# test_cfg$K_neighbors  <- 3L
-# test_cfg$seq_len      <- 10L
-# test_cfg$min_obs_per_station <- 30L
-# test_cfg$save_artifacts <- FALSE
-#
-result <- run_st_experiment(
-    cfg = test_cfg,
-    subset_stations = 100,
-    subset_max_date = "2015-12-31"
-)
+# Set HUIMORI_RUN_ST_EXAMPLE=1 to run this block interactively.
+if (TRUE) {#interactive() && identical(Sys.getenv("HUIMORI_RUN_ST_EXAMPLE"), "1")) {
+    test_cfg <- default_st_config
+    test_cfg$max_epochs <- 20L
+    test_cfg$patience <- 5L
+    test_cfg$batch_size   <- 128L
+    test_cfg$K_neighbors  <- 5L
+    # test_cfg$seq_len      <- 10L
+    # test_cfg$min_obs_per_station <- 30L
+    # test_cfg$save_artifacts <- FALSE
+    test_cfg$num_workers <- 0L  # use this with cache_dataset_tensors = TRUE
+    test_cfg$cache_dataset_tensors <- TRUE
+    test_cfg$use_amp <- TRUE # set to TRUE if using GPU and want faster training with mixed precision
+
+    result <- run_st_experiment(
+        cfg = test_cfg,
+        subset_stations = 20,
+        subset_max_date = "2015-12-31"
+    )
+}
