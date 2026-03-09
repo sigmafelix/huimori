@@ -410,6 +410,7 @@ list_process_split <-
         crew = targets::tar_resources_crew(controller = "controller_20")
       )
     ),
+    # Branched data for correct coordinates
     targets::tar_target(
       name = sf_grid_correct_split,
       command = {
@@ -457,6 +458,7 @@ list_process_split <-
 
 list_process_feature <-
   list(
+    ### F01. Distance to the nearest road ####
     targets::tar_target(
       name = df_feat_correct_d_road,
       command = {
@@ -486,6 +488,7 @@ list_process_feature <-
         sf_monitors_dist_att
       }
     ),
+    ### F02. DSM (surface elevation) ####
     targets::tar_target(
       name = df_feat_correct_dsm,
       command = chopin::extract_at(
@@ -495,6 +498,7 @@ list_process_feature <-
         force_df = TRUE
       )
     ),
+    ### F03. DEM (ground elevation) ####
     targets::tar_target(
       name = df_feat_correct_dem,
       command = chopin::extract_at(
@@ -504,6 +508,7 @@ list_process_feature <-
         force_df = TRUE
       )
     ),
+    ### F04. Land use fractions ####
     targets::tar_target(
       name = df_feat_correct_landuse,
       command = {
@@ -545,6 +550,7 @@ list_process_feature <-
         crew = targets::tar_resources_crew(controller = "controller_20")
       )
     ),
+    ### F05. MTPI (multiscale terrain position index) ####
     targets::tar_target(
       name = df_feat_correct_mtpi,
       command = {
@@ -557,6 +563,7 @@ list_process_feature <-
         )
       }
     ),
+    ### F06. MTPI at 1km buffer ####
     targets::tar_target(
       name = df_feat_correct_mtpi_1km,
       command = {
@@ -569,6 +576,7 @@ list_process_feature <-
         )
       }
     ),
+    ### F07. Emittors ####
     targets::tar_target(
       name = sf_emission_locs,
       command = {
@@ -647,6 +655,9 @@ list_process_feature <-
         result
       }
     ),
+    ### F08. Aerosol Optical Depth ####
+    
+    ### F09. Merge features ####
     targets::tar_target(
       name = df_feat_correct_merged,
       command = {

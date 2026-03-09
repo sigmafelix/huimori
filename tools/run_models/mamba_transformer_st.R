@@ -1347,7 +1347,7 @@ run_st_experiment <- function(cfg = default_st_config,
 # Set HUIMORI_RUN_ST_EXAMPLE=1 to run this block interactively.
 if (TRUE) {#interactive() && identical(Sys.getenv("HUIMORI_RUN_ST_EXAMPLE"), "1")) {
     test_cfg <- default_st_config
-    test_cfg$max_epochs <- 20L
+    test_cfg$max_epochs <- 100L
     test_cfg$patience <- 5L
     test_cfg$batch_size   <- 64L
     test_cfg$K_neighbors  <- 5L
@@ -1360,7 +1360,7 @@ if (TRUE) {#interactive() && identical(Sys.getenv("HUIMORI_RUN_ST_EXAMPLE"), "1"
 
     result <- run_st_experiment(
         cfg = test_cfg,
-        subset_stations = 200,
-        subset_date_range = c("2017-01-01", "2017-12-31")
+        subset_stations = 500,
+        subset_date_range = c("2017-01-01", "2023-12-31")
     )
 }
