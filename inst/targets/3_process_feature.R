@@ -656,7 +656,96 @@ list_process_feature <-
       }
     ),
     ### F08. Aerosol Optical Depth ####
-    
+    targets::tar_target(
+      name = chr_aod_date_seq,
+      command = {
+        seq(
+          from = as.Date("2010-01-01"),
+          to = as.Date("2023-12-31"),
+          by = "30 days"
+        )
+      }
+    ),
+    targets::tar_target(
+      name = chr_aod_date_chunks,
+      command = {
+        start_dates <- chr_aod_date_seq
+        end_dates <- c(
+          chr_aod_date_seq[-1] - 1,
+          as.Date("2023-12-31")
+        )
+        data.frame(
+          start_date = start_dates,
+          end_date = end_dates
+        )
+      },
+      iteration = "list"
+    ),
+    targets::tar_target(
+      name = df_feat_correct_aod,
+      command = {
+        date_pattern <- sprintf(
+          "%04d%02d%02d",
+          lubridate::year(
+            seq(
+              chr_aod_date_chunks$start_date,
+              chr_aod_date_chunks$end_date,
+              by = "day"
+            )
+          ),
+          lubridate::month(
+            seq(
+              chr_aod_date_chunks$start_date,
+              chr_aod_date_chunks$end_date,
+              by = "day"
+            )
+          ),
+          lubridate::mday(
+            seq(
+              chr_aod_date_chunks$start_date,
+              chr_aod_date_chunks$end_date,
+              by = "day"
+            )
+          )
+        )
+
+        aod_files <- file.path(
+          chr_dir_aod,
+          paste0(date_pattern, ".tif")
+        )
+        aod_files <- aod_files[file.exists(aod_files)]
+
+        result <- purrr::map_df(
+          aod_files,
+          function(file) {
+            aod_ras <- terra::rast(file)
+            extracted <- exactextractr::exact_extract(
+              x = aod_ras,
+              y = sf_monitors_correct,
+              fun = "weighted_mean",
+              weights = NULL
+            )
+            data.frame(
+              TMSID = sf_monitors_correct$TMSID,
+              TMSID2 = sf_monitors_correct$TMSID2,
+              date = as.Date(basename(file), format = "%Y%m%d.tif"),
+              aod = extracted
+            )
+          }
+        )
+
+        result |>
+          dplyr::group_by(TMSID, TMSID2) |>
+          dplyr::mutate(year = lubridate::year(date)) |>
+          dplyr::summarize(
+            aod = mean(aod, na.rm = TRUE),
+            .groups = "drop_last"
+          ) |>
+          dplyr::ungroup()
+      },
+      pattern = map(chr_aod_date_chunks),
+      iteration = "list"
+    ),
     ### F09. Merge features ####
     targets::tar_target(
       name = df_feat_correct_merged,

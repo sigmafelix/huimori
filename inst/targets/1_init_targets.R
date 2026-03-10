@@ -14,5 +14,10 @@ list_configs <-
     targets::tar_target(
       name = chr_dir_git,
       command = file.path(Sys.getenv("HOME"), "GitHub", "histmap-ko")
+    ),
+    targets::tar_target(
+      name = chr_date_range,
+      # this command should be modified to adjust the range of prediction
+      command = c(as.Date("2019-01-01"), as.Date("2023-12-31"))
     )
   )

@@ -38,33 +38,6 @@ aod_dates <- unique(aod_dates)
 #   fun_agg = "mean"
 # )
 
-library(stringr)
-
-qa = rast(aod_files[1])
-
-get_bits <- function(r, start, nbits = 1, filename = "", overwrite = FALSE) {
-  mask <- bitwShiftL(2^nbits - 1L, start)
-  app(
-    r,
-    fun = function(x) {
-      x <- as.integer(x)
-      out <- bitwShiftR(bitwAnd(x, mask), start)
-      out[is.na(x)] <- NA_integer_
-      out
-    },
-    filename = filename,
-    overwrite = overwrite
-  )
-}
-
-
-cloud_mask    <- get_bits(qa["AOD_QA"], start = 0, nbits = 3)   # bits 0-2
-land_water    <- get_bits(qa, start = 3, nbits = 2)   # bits 3-4
-adjacency     <- get_bits(qa, start = 5, nbits = 3)   # bits 5-7
-aod_quality   <- get_bits(qa, start = 8, nbits = 4)   # bits 8-11
-glint_mask    <- get_bits(qa, start = 12, nbits = 1)  # bit 12
-aerosol_model <- get_bits(qa, start = 13, nbits = 2)  # bits 13-14
-
 process_mcd19a2_day <- function(target_date, input_dir, output_dir, export = FALSE) {
     # 1. Locate the files for this specific date
     # Assuming your files have a naming convention like "MCD19A2_AOD_047_YYYYDDD.tif"
@@ -123,6 +96,8 @@ process_mcd19a2_day <- function(target_date, input_dir, output_dir, export = FAL
         daily_composite
     }
 }
+
+
 process_daily_tiles <- function(target_date, hdf_dir, output_dir, export = FALSE) {
   # 1. Find all HDF files for the target date across all tiles
   # Assuming standard MODIS naming: MCD19A2.A2010001.h27v05...hdf
@@ -223,19 +198,6 @@ futurize(
 # hdf_directory <- "/mnt/hdd001/huimori/aerosol/"
 # regional_aod <- process_daily_tiles(target_date, hdf_directory)
 
-
-best_mask <- cloud_mask == 1 & adjacency == 0 & aod_quality == 0
-
-aod047_best <- mask(aod047, best_mask, maskvalues = FALSE)
-aod055_best <- mask(aod055, best_mask, maskvalues = FALSE)
-
-# apply scale factor 0.001
-aod047_best <- aod047_best * 0.001
-aod055_best <- aod055_best * 0.001
-usable_mask <- cloud_mask %in% c(1, 2) &  # clear or possibly cloudy
-               adjacency %in% c(0, 3) &   # clear or one cloudy neighbor
-               aod_quality %in% c(0, 11)  # best or research quality
-
 check <-
 process_mcd19a2_day(
     target_date = "2022-01-01",
@@ -243,26 +205,4 @@ process_mcd19a2_day(
     output_dir = file.path(bdir, "processed"),
     export = FALSE
 )
-
-# 
-mirai::daemons(12L)
-mirai::mirai_map(
-    .x = aod_dates,
-    .f = function(date) {
-        prcd <-
-            amadeus::process_modis_merge(
-                path = aod_files,
-                date = date,
-                subdataset = "^(Optical_Depth|AOD_Uncertain)",
-                fun_agg = "mean"
-            )
-        targ_file <- file.path(
-            bdir, "aod", "processed",
-            sprintf("aod_%s.tif", format(date, "%Y%m%d"))
-        )
-        terra::writeRaster(prcd, targ_file)
-        out_file
-    }
-)
-
 
