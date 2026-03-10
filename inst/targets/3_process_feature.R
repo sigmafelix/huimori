@@ -684,34 +684,18 @@ list_process_feature <-
     targets::tar_target(
       name = df_feat_correct_aod,
       command = {
-        date_pattern <- sprintf(
-          "%04d%02d%02d",
-          lubridate::year(
-            seq(
-              chr_aod_date_chunks$start_date,
-              chr_aod_date_chunks$end_date,
-              by = "day"
-            )
+        date_pattern <- strftime(
+          seq(
+            chr_aod_date_chunks$start_date,
+            chr_aod_date_chunks$end_date,
+            by = "day"
           ),
-          lubridate::month(
-            seq(
-              chr_aod_date_chunks$start_date,
-              chr_aod_date_chunks$end_date,
-              by = "day"
-            )
-          ),
-          lubridate::mday(
-            seq(
-              chr_aod_date_chunks$start_date,
-              chr_aod_date_chunks$end_date,
-              by = "day"
-            )
-          )
+          "%Y%j",
         )
 
         aod_files <- file.path(
           chr_dir_aod,
-          paste0(date_pattern, ".tif")
+          paste0("MCD19A2_Daily_Composite_", date_pattern, ".tif")
         )
         aod_files <- aod_files[file.exists(aod_files)]
 
@@ -722,13 +706,13 @@ list_process_feature <-
             extracted <- exactextractr::exact_extract(
               x = aod_ras,
               y = sf_monitors_correct,
-              fun = "weighted_mean",
+              fun = "mean",
               weights = NULL
             )
             data.frame(
               TMSID = sf_monitors_correct$TMSID,
               TMSID2 = sf_monitors_correct$TMSID2,
-              date = as.Date(basename(file), format = "%Y%m%d.tif"),
+              date = as.Date(basename(file), format = "MCD19A2_Daily_Composite_%Y%j.tif"),
               aod = extracted
             )
           }

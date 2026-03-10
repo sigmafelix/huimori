@@ -127,10 +127,10 @@ list_basefiles <-
       }
     ),
     targets::tar_target(
-      name = chr_aod_files,
+      name = chr_dir_aod,
       command = {
         list.files(
-          file.path(chr_dir_data, "aod", "data"),
+          file.path(chr_dir_data, "airquality", "aod"),
           pattern = ".tif$",
           full.names = TRUE
         )
