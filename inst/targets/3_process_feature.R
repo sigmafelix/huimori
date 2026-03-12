@@ -144,6 +144,15 @@ list_process_site <-
 
       }
     ),
+    # full spacetime data frame for unique TMSID-date combinations
+    targets::tar_target(
+      name = sf_monitors_correct_full,
+      command = {
+        sfm_corr <- sf_monitors_correct |>
+          dplyr::filter(date_start <= date_end)
+        extend_grid(data = sfm_corr)
+      }
+    ),
     targets::tar_target(
       name = sf_monitors_incorrect,
       command = {
@@ -674,12 +683,18 @@ list_process_feature <-
           chr_aod_date_seq[-1] - 1,
           as.Date("2023-12-31")
         )
-        data.frame(
-          start_date = start_dates,
-          end_date = end_dates
-        )
+        df_dates <-
+          data.frame(
+            start_date = start_dates,
+            end_date = end_dates
+          ) |>
+          dplyr::mutate(
+            chunk_id = dplyr::row_number()
+          ) |>
+          dplyr::group_by(chunk_id) |>
+          targets::tar_group()
       },
-      iteration = "list"
+      iteration = "group"
     ),
     targets::tar_target(
       name = df_feat_correct_aod,
