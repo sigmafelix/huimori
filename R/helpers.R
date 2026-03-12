@@ -322,3 +322,41 @@ gee_extract_building_density <- function(
     ) |>
     dplyr::select(dplyr::all_of(point_cols), year, building_density)
 }
+
+
+#' Extend space-time data.frame into full grid using start and end dates
+#'
+#' It takes a data frame with columns TMSID2, TMSID, date_s
+#' then for each unique TMSID2-TMSID pair, it generates a complete
+#' sequence of dates from date_start and date_end values.
+#' This ensures that the resulting data frame
+#' has a complete and unique grid of TMSID2, TMSID, and date_s,
+#' which is essential for calculation while avoiding redundant rows.
+#'
+#' @param data data.frame with columns TMSID2, TMSID, and date_s
+#' @return data.frame with complete grid of TMSID2, TMSID, and date_s
+#' @importFrom dplyr select group_by rowwise transmute ungroup
+#' @importFrom tidyr unnest
+#' @export
+extend_grid <- function(data) {
+  time_zone <- sessionInfo()[["tzone"]]
+  data |>
+    dplyr::select(TMSID2, TMSID, date_start, date_end) |>
+    unique() |>
+    dplyr::group_by(TMSID2, TMSID) |>
+    dplyr::rowwise() |>
+    dplyr::transmute(
+      date_s =
+      list(
+        seq.Date(
+          from = as.Date(date_start, tz = time_zone),
+          to = as.Date(date_end, tz = time_zone),
+          by = "day"
+        )
+      )
+    ) |>
+    dplyr::ungroup() |>
+    tidyr::unnest(c("date_s")) -> grid
+
+  grid
+}
