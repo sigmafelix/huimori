@@ -37,9 +37,9 @@ targets::tar_option_set(
       "readxl", "bonsai", "lightgbm", "xgboost", "crew"),
   format = "qs", # Optionally set the default storage format. qs is fast.
   controller = crew::crew_controller_group(
+    controller_08,
     controller_01,
     controller_04,
-    controller_08,
     controller_10,
     controller_15,
     controller_20
