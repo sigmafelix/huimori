@@ -88,6 +88,7 @@ list_process_site <-
         sites_ch
       }
     ),
+    # annualize the monitor data (correct coordinates)
     targets::tar_target(
       name = sf_monitors_correct,
       command = {
@@ -664,7 +665,7 @@ list_process_feature <-
         result
       }
     ),
-    ### F08. Aerosol Optical Depth ####
+    ### F08. Aerosol Optical Depth (daily) ####
     targets::tar_target(
       name = chr_aod_date_seq,
       command = {
@@ -743,6 +744,70 @@ list_process_feature <-
           dplyr::ungroup()
       },
       pattern = map(chr_aod_date_chunks),
+      iteration = "list"
+    ),
+    ### F08A. Aerosol Optical Depth (annual) ####
+    targets::tar_target(
+      name = int_aod_year_chunks,
+      command = {
+        yrs <-
+          strftime(chr_date_range, "%Y") |>
+          as.integer()
+        yrs_vec <- seq(yrs[1], yrs[2], by = 1)
+        yrs_vec
+      },
+      iteration = "vector"
+    ),
+    targets::tar_target(
+      name = df_feat_correct_year_aod,
+      command = {
+        year <- int_aod_year_chunks
+        aod_files <- grep(
+          paste0("MCD19A2_Daily_Composite_", year, "[0-9]{3,3}.tif$"),
+          chr_dir_aod,
+          value = TRUE
+        )
+
+        r_list <- lapply(aod_files, terra::rast)
+
+        template <- r_list[[1]]
+
+        aligned_list <- lapply(r_list, function(r) {
+          if (terra::ext(r) == ext(template)) {
+            return(r)
+          } else {
+            # extend() adds NA padding if 'r' is smaller than the template
+            # crop() trims 'r' if it is larger than the template
+            r_extended <- terra::extend(r, template)
+            return(terra::crop(r_extended, template))
+          }
+        })
+
+        aod_ras <- terra::rast(aligned_list)
+
+        # read
+        sf_monitors_correct_buff <-
+          sf_monitors_correct |>
+          dplyr::filter(year == int_aod_year_chunks) |>
+          sf::st_transform(terra::crs(template)) |>
+          sf::st_buffer(dist = 0.001, nQuadSegs = 90L)
+
+        aod_yr <- terra::app(
+          aod_ras,
+          fun = function(x) median(x, na.rm = TRUE),
+          cores = 4L
+        )
+        extracted <- exactextractr::exact_extract(
+          x = aod_yr,
+          y = sf_monitors_correct_buff,
+          fun = "mean",
+          weights = NULL,
+          force_df = TRUE,
+          append_cols = c("TMSID", "TMSID2", "year")
+        )
+        extracted
+      },
+      pattern = map(int_aod_year_chunks),
       iteration = "list"
     ),
     ### F09. Merge features ####
