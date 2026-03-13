@@ -756,14 +756,14 @@ list_process_feature <-
         yrs_vec <- seq(yrs[1], yrs[2], by = 1)
         yrs_vec
       },
-      iteration = "vector"
+      iteration = "list"
     ),
-    targets::tar_target(
-      name = df_feat_correct_year_aod,
+    geotargets::tar_terra_rast(
+      name = rast_year_aod,
       command = {
-        year <- int_aod_year_chunks
+        year_i <- int_aod_year_chunks
         aod_files <- grep(
-          paste0("MCD19A2_Daily_Composite_", year, "[0-9]{3,3}.tif$"),
+          paste0("MCD19A2_Daily_Composite_", year_i, "[0-9]{3,3}.tif$"),
           chr_dir_aod,
           value = TRUE
         )
@@ -773,7 +773,7 @@ list_process_feature <-
         template <- r_list[[1]]
 
         aligned_list <- lapply(r_list, function(r) {
-          if (terra::ext(r) == ext(template)) {
+          if (terra::ext(r) == terra::ext(template)) {
             return(r)
           } else {
             # extend() adds NA padding if 'r' is smaller than the template
@@ -785,20 +785,29 @@ list_process_feature <-
 
         aod_ras <- terra::rast(aligned_list)
 
-        # read
-        sf_monitors_correct_buff <-
-          sf_monitors_correct |>
-          dplyr::filter(year == int_aod_year_chunks) |>
-          sf::st_transform(terra::crs(template)) |>
-          sf::st_buffer(dist = 0.001, nQuadSegs = 90L)
-
         aod_yr <- terra::app(
           aod_ras,
           fun = function(x) median(x, na.rm = TRUE),
           cores = 4L
         )
+        aod_yr
+      },
+      pattern = map(int_aod_year_chunks),
+      iteration = "list"
+    ),
+    targets::tar_target(
+      name = df_feat_correct_year_aod,
+      command = {
+        year_i <- int_aod_year_chunks
+        # read
+        sf_monitors_correct_buff <-
+          sf_monitors_correct |>
+          dplyr::filter(year == year_i) |>
+          sf::st_transform(terra::crs(template)) |>
+          sf::st_buffer(dist = 0.001, nQuadSegs = 90L)
+
         extracted <- exactextractr::exact_extract(
-          x = aod_yr,
+          x = rast_year_aod,
           y = sf_monitors_correct_buff,
           fun = "mean",
           weights = NULL,
@@ -807,7 +816,7 @@ list_process_feature <-
         )
         extracted
       },
-      pattern = map(int_aod_year_chunks),
+      pattern = map(int_aod_year_chunks, rast_year_aod),
       iteration = "list"
     ),
     ### F09. Merge features ####
@@ -817,10 +826,10 @@ list_process_feature <-
         df_res <-
           purrr::reduce(
             .x =
-              list(
-                sf_monitors_correct,
-                df_feat_correct_d_road
-              ),
+            list(
+              sf_monitors_correct,
+              df_feat_correct_d_road
+            ),
             .f = collapse::join,
             on = c("TMSID", "TMSID2", "year")
           ) %>%

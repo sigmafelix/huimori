@@ -29,7 +29,7 @@ controller_20 <-
 # Set target options:
 targets::tar_option_set(
   packages =
-    c("targets",# "geotargets", 
+    c("targets", "geotargets",
       "terra", "sf", "dplyr", "collapse",
       "data.table", "tibble", "tune", "yardstick", "workflows",
       "recipes", "dials", "lubridate", "rgee",
