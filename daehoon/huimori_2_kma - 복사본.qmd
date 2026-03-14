@@ -1,0 +1,973 @@
+---
+title: "huimori_1_first_analysis"
+format:
+  html:
+    theme: cosmo
+    toc: true
+    toc-depth: 3
+    toc-location: left
+    code-fold: show
+    code-summary: "코드 보기"
+    code-overflow: wrap
+    number-sections: true
+    smooth-scroll: true
+    embed-resources: true
+    df-print: paged
+    page-layout: full
+editor: visual
+---
+
+```{r}
+library(tidyverse)
+library(sf)
+library(data.table)
+library(terra)
+library(ncdf4)
+library(httr)
+library(exactextractr)
+library(future)
+library(future.apply)
+library(future.mirai)
+library(readxl)
+library(arrow)
+
+# 측정소 데이터
+
+file_path <- "raw_data_files/sites_history_cleaning_20250311.xlsx"
+sites <- read_excel(file_path)
+
+sites_2020 <- sites %>%
+  filter(year == 2020) %>%
+  select(TMSID, year, site_type, longitude_common, latitude_common, date_start, date_end)
+
+sites_2020_sf <- st_as_sf(sites_2020, 
+                     coords = c("longitude_common", "latitude_common"), 
+                     crs = 4326)
+```
+
+# 환경변수 데이터
+
+## ERA5-Land 데이터 불러오기
+
+```{r}
+# ERA5-Land
+
+### Data type: Gridded
+### Projection: Regular latitude-longitude grid
+### Horizontal coverage: Global
+### Horizontal resolution: 0.1° x 0.1°; Native resolution is 9 km.
+### Vertical coverage: From 2 m above the surface level, to a soil depth of 289 cm.
+### Vertical resolution: 4 levels of the ECMWF surface model: Layer 1: 0 -7cm, Layer 2: 7 -28cm, Layer 3: 28-100cm, Layer 4: 100-289cm Some parameters are defined at 2 m over the surface.
+### Temporal coverage: January 1950 to present
+### Temporal resolution: Hourly
+### File format: GRIB
+### Update frequency: Daily
+
+# Using Variables
+
+### t2m: 2m temperature
+### ssr: Surface net solar radiation
+### u10: 10m u-component of wind
+### v10: 10m v-component of wind
+### sp: Surface pressure
+### tp: Total precipitation
+```
+
+```{r}
+### !!! 다운로드된 zip nc 파일 불러오기 !!!
+
+# 1. 경로 설정 및 파일 목록 정렬
+base_path <- "/members/dhnyu/huimori/daehoon/ERA5_Land"
+# 파일 목록을 정렬하여 2017_12.nc가 가장 먼저 오도록 함
+zip_style_files <- sort(list.files(base_path, pattern = "\\.nc$", full.names = TRUE))
+temp_extract_path <- file.path(tempdir(), "era5_working")
+dir.create(temp_extract_path, showWarnings = FALSE)
+
+var_names_unique <- c("t2m", "ssr", "u10", "v10", "sp", "tp")
+
+# 시작 시점 수정: 2017-12-01 00:00:00 (UTC)
+# KST 기준 2018-01-01의 00시~08시(UTC 전일 15~23시)를 채우기 위함
+start_date <- as.POSIXct("2017-12-01 00:00:00", tz = "UTC")
+
+# 2. 변수별 루프
+for (v in var_names_unique) {
+  message(paste("[Processing Variable]:", v))
+  
+  v_list <- lapply(seq_along(zip_style_files), function(i) {
+    f <- zip_style_files[i]
+    target_subdir <- file.path(temp_extract_path, paste0("m_", i))
+    dir.create(target_subdir, showWarnings = FALSE)
+    
+    # 확장자에 상관없이 ZIP 내부의 data_0.nc 추출
+    unzip(f, files = "data_0.nc", exdir = target_subdir)
+    real_nc <- file.path(target_subdir, "data_0.nc")
+    
+    if (!file.exists(real_nc)) return(NULL)
+    
+    # 래스터 로드 및 변수 선택
+    r <- try(rast(real_nc), silent = TRUE)
+    if (inherits(r, "try-error")) {
+      unlink(target_subdir, recursive = TRUE)
+      return(NULL)
+    }
+    
+    idx <- grep(v, names(r))
+    
+    if (length(idx) == 0) {
+      unlink(target_subdir, recursive = TRUE)
+      return(NULL)
+    }
+    
+    # 메모리에 강제 로드 (산술 연산 활용)
+    res <- r[[idx]] * 1 
+    
+    # 임시 파일 삭제 및 메모리 확보
+    unlink(target_subdir, recursive = TRUE)
+    
+    return(res)
+  })
+  
+  v_list <- v_list[!sapply(v_list, is.null)]
+  
+  if (length(v_list) > 0) {
+    combined_rast <- rast(v_list)
+    
+    # 시간 레이어 이름 할당
+    total_lyrs <- nlyr(combined_rast)
+    # 2017-12-01부터 1시간 단위 시퀀스 생성
+    time_seq <- seq(from = start_date, by = "hour", length.out = total_lyrs)
+    names(combined_rast) <- paste0(v, "_", format(time_seq, "%Y%m%d_%H"))
+    
+    assign(paste0(v, "_raster"), combined_rast, envir = .GlobalEnv)
+    message(paste("[Success]", v, "통합 완료 (총", total_lyrs, "레이어)"))
+  }
+  gc()
+}
+
+# 임시 디렉토리 정리
+unlink(temp_extract_path, recursive = TRUE)
+```
+
+## 해상도 축소 작업 (일별 해상도)
+
+```{r}
+### !!! 모든 변수에 대해 래스터 결과 합치기 !!!
+
+# 1. 온도 단위 변환 (Kelvin -> Celsius)
+t2m_raster_C <- t2m_raster - 273.15
+
+# 2. 강수량 단위 변환 (m -> mm) 및 누적값 처리
+# ERA5-Land의 tp는 시간당 누적(m)이므로 mm로 변환
+tp_raster_mm <- tp_raster * 1000
+
+# 3. 통합 데이터셋 구조화 (SpatRasterDataset)
+# 여러 변수를 하나의 객체로 묶어 관리 (메모리 주소 참조 방식)
+era5_sds <- sds(t2m_raster_C, ssr_raster, u10_raster, v10_raster, sp_raster, tp_raster_mm)
+names(era5_sds) <- c("temp_2m", "solar_rad", "u_wind", "v_wind", "pressure", "precip")
+
+### !!! 시간별자료를 일별자료로 시간해상도 축소 !!!
+
+
+start_t <- as.POSIXct("2017-12-01 00:00:00", tz = "UTC")
+total_hours <- nlyr(t2m_raster) 
+full_time_seq <- seq(from = start_t, by = "hour", length.out = total_hours)
+
+# [핵심] 한국 시간(KST) 기준으로 날짜 인덱스 생성
+daily_index_kst <- as.Date(full_time_seq, tz = "Asia/Seoul")
+
+# SDS 내 모든 SpatRaster에 대해 일단위 평균 적용
+# SDS 내 모든 SpatRaster에 대해 일단위 평균 적용
+era5_daily_list <- lapply(names(era5_sds), function(var_name) {
+  message(paste("[Aggregating]", var_name, "to Daily Mean (KST)..."))
+
+  hrly_rast <- era5_sds[[var_name]]
+  
+  # 1. 일단위 집계 수행
+  # daily_index_kst의 유니크한 값 순서대로 결과 레이어가 생성됨
+  daily_rast <- tapp(hrly_rast, index = daily_index_kst, fun = mean)
+  
+  # 2. 필터링 대상 및 인덱스 추출
+  # 전체 기간(2017.12~2024.12) 중 실제 daily_index_kst에 포함된 유니크한 날짜들
+  unique_dates <- sort(unique(daily_index_kst))
+  
+  # 우리가 추출하고자 하는 목표 날짜 (2018-01-01 ~ 2024-12-31)
+  target_dates <- seq(as.Date("2018-01-01"), as.Date("2024-12-31"), by = "day")
+  
+  # 유니크 날짜들 중 목표 날짜에 해당하는 위치(인덱스) 찾기
+  target_idx <- which(unique_dates %in% target_dates)
+  
+  # 3. 레이어 필터링 (인덱스 기반이므로 이름 형식의 영향을 받지 않음)
+  daily_rast_filtered <- daily_rast[[target_idx]]
+
+  # 4. 레이어 이름 재설정 (YYYYMMDD 형식)
+  # 필터링된 날짜들만 골라내어 이름 부여
+  final_dates <- unique_dates[target_idx]
+  names(daily_rast_filtered) <- paste0(var_name, "_", format(final_dates, "%Y%m%d"))
+
+  return(daily_rast_filtered)
+})
+
+# 일단위 SpatRasterDataset 재구성
+era5_daily_sds <- sds(era5_daily_list)
+names(era5_daily_sds) <- names(era5_sds)
+```
+
+## 다양한 버퍼 시나리오
+
+```{r}
+### !!! 측정소(TMSID)별 변수종류(variable)와 버퍼 사이즈(buffer_size)에 따른 변수값 
+
+### 변수종류(variable)
+var_names <- names(era5_daily_sds) # c("temp_2m", "solar_rad", "u_wind", "v_wind", "pressure", "precip")
+
+### 버퍼 사이즈(buffer_size)
+buffer_distances <- c(30, 100, 250, 500, 1000, 2000, 5000)
+
+# 1. 결과 저장용 리스트 초기화
+total_results_list <- list()
+
+# 2. 중첩 루프 수행
+for (dist in buffer_distances) {
+  message(paste0("\n>>> Processing Buffer Distance: ", dist, "m <<<"))
+  
+  # 버퍼 생성 및 투영체 변환
+  temp_buffer <- sites_2020_sf %>%
+    st_transform(5186) %>%
+    st_buffer(dist = dist) %>%
+    st_transform(st_crs(era5_daily_sds[[1]]))
+  
+  # 고정 정보 추출 (TMSID, date_start, date_end 포함)
+  base_info <- as.data.table(st_drop_geometry(sites_2020_sf))
+  
+  for (v_name in names(era5_daily_sds)) {
+    message(paste("    Variable:", v_name))
+    
+    # 공간 평균 추출
+    extracted <- exact_extract(era5_daily_sds[[v_name]], temp_buffer, fun = "mean", progress = FALSE)
+    setDT(extracted)
+    
+    # 열 이름 정제: 'mean.temp_2m_20180101' -> '20180101'
+    current_names <- names(extracted)
+    new_names <- gsub(paste0("mean.", v_name, "_"), "", current_names)
+    setnames(extracted, old = current_names, new = new_names)
+    
+    # 구조 생성: 메타데이터 + 추출 값
+    # base_info에 이미 TMSID, year, site_type, date_start, date_end가 포함됨
+    dt_part <- copy(base_info)
+    dt_part[, `:=`(
+      variable = v_name,
+      buffer_size = dist
+    )]
+    
+    # 시계열 데이터 결합
+    dt_part <- cbind(dt_part, extracted)
+    
+    # 컬럼 순서 재배치 (ID, 변수, 버퍼, 시작일, 종료일 순)
+    meta_cols <- c("TMSID", "variable", "buffer_size", "date_start", "date_end")
+    val_cols <- setdiff(names(dt_part), c(meta_cols, names(base_info)))
+    setcolorder(dt_part, c(meta_cols, val_cols))
+    
+    total_results_list[[length(total_results_list) + 1]] <- dt_part
+    
+    rm(extracted, dt_part)
+  }
+  rm(temp_buffer)
+  gc()
+}
+
+# 3. 최종 통합
+era_dt <- rbindlist(total_results_list, use.names = TRUE, fill = TRUE)
+
+# 결과 확인
+print(era_dt[1:5, 1:12])
+```
+
+## 이전 고려X vs 이전 고려 분리
+
+```{r}
+### 이전을 고려하지 않는 경우: `era_dt_v1`
+#### TMSID의 중복이 있을 때, 그냥 첫번째 TMSID만 남기고 나머지는 삭제
+era_dt_v1 <- era_dt[, .SD[1], by = .(TMSID, variable, buffer_size)]
+
+### 이전을 고려하는 경우: `era_dt_v2`
+#### TMSID의 중복이 있을 때, `date_start`과 `date_start`를 기준으로 하나의 행으로 합치기
+era_dt_v2_working <- copy(era_dt)
+
+# 그룹별 행 수 계산
+era_dt_v2_working[, group_n := .N, by = list(TMSID, variable, buffer_size)]
+
+# 중복 없는 데이터(Unique)와 중복 있는 데이터(Duplicated) 분리
+era_unique <- era_dt_v2_working[group_n == 1]
+era_dupes  <- era_dt_v2_working[group_n > 1]
+
+message(paste("중복 그룹 수:", uniqueN(era_dupes$TMSID), " / 전체 그룹 수:", uniqueN(era_dt_v2_working$TMSID)))
+
+# 2. 중복 그룹에 대해서만 시공간 마스킹 수행
+if (nrow(era_dupes) > 0) {
+  date_cols <- grep("^[0-9]{8}$", names(era_dupes), value = TRUE)
+  
+  # 마스킹 연산 (중복 그룹 한정)
+  for (d_col in date_cols) {
+    curr_d <- as.IDate(d_col, format = "%Y%m%d")
+    # 운영 기간 외 데이터 NA 처리
+    era_dupes[!( (is.na(date_start) | curr_d >= as.IDate(date_start)) & 
+                 (is.na(date_end)   | curr_d <= as.IDate(date_end)) ), 
+              (d_col) := NA]
+  }
+  
+  # 병합(Collapse)
+  era_dupes_final <- era_dupes[, lapply(.SD, function(x) {
+    if (all(is.na(x))) return(as.numeric(NA))
+    return(mean(x, na.rm = TRUE))
+  }), by = list(TMSID, variable, buffer_size), .SDcols = date_cols]
+  
+  # 메타데이터 재결합
+  meta_dupes <- era_dupes[, .(
+    date_start = min(date_start, na.rm = TRUE),
+    date_end   = max(date_end, na.rm = TRUE)
+  ), by = list(TMSID, variable, buffer_size)]
+  
+  era_dupes_final <- merge(meta_dupes, era_dupes_final, by = c("TMSID", "variable", "buffer_size"))
+}
+
+# 3. 최종 통합 (Unique + 가공된 Duplicates) 및 객체명 설정
+final_cols <- names(era_dupes_final)
+era_dt_v2 <- rbind(era_unique[, ..final_cols], era_dupes_final)
+
+# 임시 컬럼 제거 및 결과 확인
+era_dt_v2[, group_n := NULL]
+message("[Version 2] 가공 완료: era_dt_v2 생성")
+```
+
+```{r}
+# 저장 경로 설정 (현재 작업 디렉토리 기준)
+output_dir <- "extracted_climate_parquet"
+if (!dir.exists(output_dir)) dir.create(output_dir)
+
+# 1. era_dt_v1 (이전을 고려하지 않은 버전) 저장
+write_parquet(era_dt_v1, file.path(output_dir, "era_dt_v1.parquet"))
+
+# 2. era_dt_v2 (이전 이력을 반영한 버전) 저장
+write_parquet(era_dt_v2, file.path(output_dir, "era_dt_v2.parquet"))
+```
+
+# 미세먼지 데이터
+
+## Air Korea 데이터 불러오기
+
+```{r}
+### 서버에 이미 존재하는 아래 객체를 활용하였음.
+### /mnt/hdd001/Korea/airquality/outdoor/airkorea_2010_2024.parquet (원본)
+### ~/huimori/daehoon/raw_data_files/airkorea_2010_2024.parquet (복사본)
+```
+
+```{r}
+file_path <- "raw_data_files/airkorea_2010_2024.parquet"
+
+# 2. 데이터 로드 및 data.table 변환
+# read_parquet()을 통해 읽어온 뒤 setDT()로 참조 변환 수행
+airkorea_dt <- read_parquet(file_path)
+setDT(airkorea_dt)
+
+# 3. 데이터 로드 확인
+message(paste("총 행 수:", nrow(airkorea_dt)))
+head(airkorea_dt)
+```
+
+## Air Korea 데이터 가공
+
+```{r}
+start_time <- "2018-01-01 00:00:00"
+end_time   <- "2024-12-31 23:59:59"
+
+daily_dt <- airkorea_dt[datehour >= as.POSIXct(start_time) & 
+                        datehour <= as.POSIXct(end_time), 
+                        .(PM10 = mean(PM10, na.rm = TRUE), 
+                          PM25 = mean(PM25, na.rm = TRUE)), 
+                        by = .(TMSID, 
+                               date_origin = as.Date(datehour, tz = "Asia/Seoul"))]
+
+daily_dt[, date := format(date_origin, "%Y%m%d")]
+
+daily_long <- melt(daily_dt, 
+                   id.vars = c("TMSID", "date"), 
+                   measure.vars = c("PM10", "PM25"), 
+                   variable.name = "air_quality", 
+                   value.name = "concentration")
+
+aq_dt <- dcast(daily_long, 
+                       TMSID + air_quality ~ date, 
+                       value.var = "concentration")
+
+print(aq_dt[1:5, 1:10])
+```
+
+# 회귀분석 실험 (이전 고려 X)
+
+## 데이터 재구조화
+
+```{r}
+# 1. 에어코리아(aq_dt) 전처리: Wide -> Long
+# air_quality(PM10, PM25)를 각각의 컬럼으로 올리기 위해 dcast 병행
+aq_long <- melt(aq_dt, id.vars = c("TMSID", "air_quality"), 
+                variable.name = "date", value.name = "concentration")
+
+aq_final <- dcast(aq_long, TMSID + date ~ air_quality, value.var = "concentration")
+aq_final[, date := as.character(date)] # 결합을 위해 character 변환
+
+# 2. 기상 데이터(era_dt_v1) 전처리: Wide -> Long
+# 여러 기상 변수(temp_2m, precip 등)를 각각의 컬럼으로 펼침
+era_long <- melt(era_dt_v1, 
+                 id.vars = c("TMSID", "variable", "buffer_size"), 
+                 measure.vars = patterns("^[0-9]{8}$"), 
+                 variable.name = "date", value.name = "value")
+
+era_final <- dcast(era_long, TMSID + date + buffer_size ~ variable, value.var = "value")
+era_final[, date := as.character(date)]
+
+# 3. 최종 데이터 통합 (Inner Join)
+# TMSID와 date가 일치하는 데이터만 결합
+final_ml_data <- merge(aq_final, era_final, by = c("TMSID", "date"))
+
+final_ml_data[, date_obj := as.IDate(date, format = "%Y%m%d")]
+final_ml_data[, `:=`(
+  month = month(date_obj),
+  day_of_week = wday(date_obj), # 1(일)~7(토)
+  is_weekend = ifelse(wday(date_obj) %in% c(1, 7), 1, 0),
+  day_of_year = yday(date_obj)
+)]
+```
+
+## 데이터 전처리
+
+```{r}
+required_vars <- c("PM10", "PM25", "precip", "pressure", "solar_rad", 
+                   "temp_2m", "u_wind", "v_wind", "month", "day_of_year", "is_weekend")
+
+clean_ml_data <- na.omit(final_ml_data, cols = required_vars)
+
+original_n <- nrow(final_ml_data)
+clean_n <- nrow(clean_ml_data)
+removed_n <- original_n - clean_n
+
+message(paste0("원본 행 수: ", format(original_n, big.mark=",")))
+message(paste0("정제 후 행 수: ", format(clean_n, big.mark=",")))
+message(paste0("제거된 행 수: ", format(removed_n, big.mark=","), 
+               " (", round(removed_n/original_n*100, 2), "%)"))
+
+print(clean_ml_data[1:5, ])
+```
+
+## XGBoost
+
+```{r}
+library(xgboost)
+
+buffer_list <- sort(unique(clean_ml_data$buffer_size))
+targets <- c("PM10", "PM25")
+predictors <- c("precip", "pressure", "solar_rad", "temp_2m", "u_wind", "v_wind",
+                "month", "day_of_year", "is_weekend")
+
+# 최종 결과를 담을 통합 테이블
+final_bench_results <- data.table()
+
+for (t_var in targets) {
+  message(paste("\n### Target Pollutant:", t_var, "###"))
+  
+  for (dist in buffer_list) {
+    message(paste(">>> Evaluating Buffer Size:", dist, "m"))
+    
+    sub_data <- clean_ml_data[buffer_size == dist]
+    
+    # 시계열 분할
+    train_idx <- which(sub_data$date_obj < as.IDate("2023-01-01"))
+    test_idx  <- which(sub_data$date_obj >= as.IDate("2023-01-01"))
+    
+    # DMatrix 구성
+    dtrain <- xgb.DMatrix(data = as.matrix(sub_data[train_idx, ..predictors]),
+                          label = sub_data[[t_var]][train_idx])
+    dtest  <- xgb.DMatrix(data = as.matrix(sub_data[test_idx, ..predictors]),
+                          label = sub_data[[t_var]][test_idx])
+    
+    # 학습 (100 rounds)
+    fit <- xgb.train(params = list(objective = "reg:squarederror", eta = 0.1),
+                     data = dtrain, nrounds = 100, verbose = 0)
+    
+    # 평가
+    preds <- predict(fit, dtest)
+    actuals <- sub_data[[t_var]][test_idx]
+    
+    r2 <- cor(actuals, preds)^2
+    rmse <- sqrt(mean((actuals - preds)^2))
+    
+    # 결과 누적
+    final_bench_results <- rbind(final_bench_results, 
+                                 data.table(target = t_var, buffer = dist, R2 = r2, RMSE = rmse))
+  }
+}
+
+# 결과 확인: 타겟별 성능 순 정렬
+print(final_bench_results[order(target, -R2)])
+```
+
+## Elastic Net
+
+```{r}
+library(glmnet)
+
+buffer_list <- sort(unique(clean_ml_data$buffer_size))
+targets <- c("PM10", "PM25")
+predictors <- c("precip", "pressure", "solar_rad", "temp_2m", "u_wind", "v_wind",
+                "month", "day_of_year", "is_weekend")
+
+# 최종 결과를 담을 통합 테이블
+final_bench_en_results <- data.table()
+
+for (t_var in targets) {
+  message(paste("\n### Target Pollutant:", t_var, " (Elastic Net) ###"))
+  
+  for (dist in buffer_list) {
+    message(paste(">>> Evaluating Buffer Size:", dist, "m"))
+    
+    # 1. 해당 버퍼 데이터 추출
+    sub_data <- clean_ml_data[buffer_size == dist]
+    
+    # 2. 시계열 분할 (Train: 2018-2022 / Test: 2023-2024)
+    train_idx <- which(sub_data$date_obj < as.IDate("2023-01-01"))
+    test_idx  <- which(sub_data$date_obj >= as.IDate("2023-01-01"))
+    
+    # 3. 데이터 포맷 변환 (Matrix 형태 필수)
+    x_train <- as.matrix(sub_data[train_idx, ..predictors])
+    y_train <- sub_data[[t_var]][train_idx]
+    x_test  <- as.matrix(sub_data[test_idx, ..predictors])
+    y_test  <- sub_data[[t_var]][test_idx]
+    
+    # 4. 모델 학습 (Elastic Net)
+    # alpha = 0.5 (Lasso와 Ridge의 절반), lambda는 교차검증 없이 기본값으로 시도하거나
+    # 속도를 위해 단순 회귀에 가까운 작은 lambda를 사용
+    fit_en <- glmnet(x_train, y_train, alpha = 0.5, family = "gaussian")
+    
+    # 5. 예측 및 평가 (가장 적절한 lambda 지점 선택)
+    # 여기서는 모델 경로 중 마지막(가장 규제가 적은) 값을 사용
+    preds <- as.vector(predict(fit_en, newx = x_test, s = min(fit_en$lambda)))
+    actuals <- y_test
+    
+    r2 <- cor(actuals, preds)^2
+    rmse <- sqrt(mean((actuals - preds)^2))
+    
+    # 6. 결과 누적
+    final_bench_en_results <- rbind(final_bench_en_results, 
+                                    data.table(target = t_var, buffer = dist, R2 = r2, RMSE = rmse))
+    
+    # 메모리 정리
+    rm(sub_data, x_train, y_train, x_test, y_test, fit_en); gc()
+  }
+}
+
+# 결과 확인
+message("\n[Elastic Net Benchmarking Results]")
+print(final_bench_en_results[order(target, -R2)])
+```
+
+## GAM (Generalized Additive Model)
+
+```{r}
+library(mgcv) # GAM 분석을 위한 패키지
+
+buffer_list <- sort(unique(clean_ml_data$buffer_size))
+targets <- c("PM10", "PM25")
+# GAM에서는 각 변수에 s()를 붙여 평활 함수(smooth term)로 정의
+# month와 day_of_year는 주기성을 고려하여 cc(cyclic cubic spline)를 사용할 수도 있으나, 
+# 여기서는 일반적인 s()를 사용합니다.
+predictors_gam <- c("s(precip)", "s(pressure)", "s(solar_rad)", "s(temp_2m)", 
+                    "s(u_wind)", "s(v_wind)", "s(month)", "s(day_of_year)")
+formula_base <- paste(predictors_gam, collapse = " + ")
+
+# 최종 결과를 담을 통합 테이블
+final_bench_gam_results <- data.table()
+
+for (t_var in targets) {
+  message(paste("\n### Target Pollutant:", t_var, " (GAM/BAM) ###"))
+  
+  for (dist in buffer_list) {
+    message(paste(">>> Evaluating Buffer Size:", dist, "m"))
+    
+    # 1. 해당 버퍼 데이터 추출
+    sub_data <- clean_ml_data[buffer_size == dist]
+    
+    # 2. 시계열 분할
+    train_data <- sub_data[date_obj < as.IDate("2023-01-01")]
+    test_data  <- sub_data[date_obj >= as.IDate("2023-01-01")]
+    
+    # 3. 모델 학습 (bam: 대용량 데이터 전용 GAM)
+    # discrete = TRUE 옵션을 통해 연산 속도를 비약적으로 향상시킴
+    fit_gam <- bam(
+      as.formula(paste(t_var, "~", formula_base, "+ is_weekend")),
+      data = train_data,
+      discrete = TRUE,
+      nthreads = parallel::detectCores() - 1
+    )
+    
+    # 4. 예측 및 평가
+    preds <- as.vector(predict(fit_gam, newdata = test_data))
+    actuals <- test_data[[t_var]]
+    
+    r2 <- cor(actuals, preds, use = "complete.obs")^2
+    rmse <- sqrt(mean((actuals - preds)^2, na.rm = TRUE))
+    
+    # 5. 결과 누적
+    final_bench_gam_results <- rbind(final_bench_gam_results, 
+                                     data.table(target = t_var, buffer = dist, R2 = r2, RMSE = rmse))
+    
+    rm(train_data, test_data, fit_gam); gc()
+  }
+}
+
+# 결과 확인
+message("\n[GAM/BAM Benchmarking Results]")
+print(final_bench_gam_results[order(target, -R2)])
+```
+
+## Random Forest
+
+```{r}
+library(ranger) # 고속 Random Forest 구현체
+
+buffer_list <- sort(unique(clean_ml_data$buffer_size))
+targets <- c("PM10", "PM25")
+predictors <- c("precip", "pressure", "solar_rad", "temp_2m", "u_wind", "v_wind",
+                "month", "day_of_year", "is_weekend")
+
+# 최종 결과를 담을 통합 테이블
+final_bench_rf_results <- data.table()
+
+for (t_var in targets) {
+  message(paste("\n### Target Pollutant:", t_var, " (Random Forest) ###"))
+  
+  for (dist in buffer_list) {
+    message(paste(">>> Evaluating Buffer Size:", dist, "m"))
+    
+    # 1. 해당 버퍼 데이터 추출
+    sub_data <- clean_ml_data[buffer_size == dist]
+    
+    # 2. 시계열 분할 (Train: 2018-2022 / Test: 2023-2024)
+    train_data <- sub_data[date_obj < as.IDate("2023-01-01")]
+    test_data  <- sub_data[date_obj >= as.IDate("2023-01-01")]
+    
+    # 3. 모델 학습 (ranger)
+    # num.trees: 100개로 설정 (XGBoost 100 rounds와 비교 가능하도록 설정)
+    # importance: 변수 중요도 계산 설정
+    fit_rf <- ranger(
+      formula = as.formula(paste(t_var, "~", paste(predictors, collapse = " + "))),
+      data = train_data,
+      num.trees = 100,
+      importance = "impurity",
+      verbose = FALSE,
+      seed = 123
+    )
+    
+    # 4. 예측 및 평가
+    preds <- predict(fit_rf, data = test_data)$predictions
+    actuals <- test_data[[t_var]]
+    
+    r2 <- cor(actuals, preds)^2
+    rmse <- sqrt(mean((actuals - preds)^2))
+    
+    # 5. 결과 누적
+    final_bench_rf_results <- rbind(final_bench_rf_results, 
+                                    data.table(target = t_var, buffer = dist, R2 = r2, RMSE = rmse))
+    
+    # 메모리 정리
+    rm(train_data, test_data, fit_rf); gc()
+  }
+}
+
+# 결과 확인: 타겟별 성능 순 정렬
+message("\n[Random Forest Benchmarking Results]")
+print(final_bench_rf_results[order(target, -R2)])
+```
+
+# 회귀분석 실험 (이전 고려 O)
+
+## 데이터 재구조화
+
+```{r}
+# 1. 에어코리아(aq_dt) 전처리: Wide -> Long
+# air_quality(PM10, PM25)를 각각의 컬럼으로 올리기 위해 dcast 병행
+aq_long <- melt(aq_dt, id.vars = c("TMSID", "air_quality"), 
+                variable.name = "date", value.name = "concentration")
+
+aq_final <- dcast(aq_long, TMSID + date ~ air_quality, value.var = "concentration")
+aq_final[, date := as.character(date)] # 결합을 위해 character 변환
+
+# 2. 기상 데이터(era_dt_v2) 전처리: Wide -> Long
+# 여러 기상 변수(temp_2m, precip 등)를 각각의 컬럼으로 펼침
+era_long <- melt(era_dt_v2, 
+                 id.vars = c("TMSID", "variable", "buffer_size"), 
+                 measure.vars = patterns("^[0-9]{8}$"), 
+                 variable.name = "date", value.name = "value")
+
+era_final <- dcast(era_long, TMSID + date + buffer_size ~ variable, value.var = "value")
+era_final[, date := as.character(date)]
+
+# 3. 최종 데이터 통합 (Inner Join)
+# TMSID와 date가 일치하는 데이터만 결합
+final_ml_data <- merge(aq_final, era_final, by = c("TMSID", "date"))
+
+final_ml_data[, date_obj := as.IDate(date, format = "%Y%m%d")]
+final_ml_data[, `:=`(
+  month = month(date_obj),
+  day_of_week = wday(date_obj), # 1(일)~7(토)
+  is_weekend = ifelse(wday(date_obj) %in% c(1, 7), 1, 0),
+  day_of_year = yday(date_obj)
+)]
+```
+
+## 데이터 전처리
+
+```{r}
+required_vars <- c("PM10", "PM25", "precip", "pressure", "solar_rad", 
+                   "temp_2m", "u_wind", "v_wind", "month", "day_of_year", "is_weekend")
+
+clean_ml_data <- na.omit(final_ml_data, cols = required_vars)
+
+original_n <- nrow(final_ml_data)
+clean_n <- nrow(clean_ml_data)
+removed_n <- original_n - clean_n
+
+message(paste0("원본 행 수: ", format(original_n, big.mark=",")))
+message(paste0("정제 후 행 수: ", format(clean_n, big.mark=",")))
+message(paste0("제거된 행 수: ", format(removed_n, big.mark=","), 
+               " (", round(removed_n/original_n*100, 2), "%)"))
+
+print(clean_ml_data[1:5, ])
+```
+
+## XGBoost
+
+```{r}
+library(xgboost)
+
+buffer_list <- sort(unique(clean_ml_data$buffer_size))
+targets <- c("PM10", "PM25")
+predictors <- c("precip", "pressure", "solar_rad", "temp_2m", "u_wind", "v_wind",
+                "month", "day_of_year", "is_weekend")
+
+# 최종 결과를 담을 통합 테이블
+final_bench_results <- data.table()
+
+for (t_var in targets) {
+  message(paste("\n### Target Pollutant:", t_var, "###"))
+  
+  for (dist in buffer_list) {
+    message(paste(">>> Evaluating Buffer Size:", dist, "m"))
+    
+    sub_data <- clean_ml_data[buffer_size == dist]
+    
+    # 시계열 분할
+    train_idx <- which(sub_data$date_obj < as.IDate("2023-01-01"))
+    test_idx  <- which(sub_data$date_obj >= as.IDate("2023-01-01"))
+    
+    # DMatrix 구성
+    dtrain <- xgb.DMatrix(data = as.matrix(sub_data[train_idx, ..predictors]),
+                          label = sub_data[[t_var]][train_idx])
+    dtest  <- xgb.DMatrix(data = as.matrix(sub_data[test_idx, ..predictors]),
+                          label = sub_data[[t_var]][test_idx])
+    
+    # 학습 (100 rounds)
+    fit <- xgb.train(params = list(objective = "reg:squarederror", eta = 0.1),
+                     data = dtrain, nrounds = 100, verbose = 0)
+    
+    # 평가
+    preds <- predict(fit, dtest)
+    actuals <- sub_data[[t_var]][test_idx]
+    
+    r2 <- cor(actuals, preds)^2
+    rmse <- sqrt(mean((actuals - preds)^2))
+    
+    # 결과 누적
+    final_bench_results <- rbind(final_bench_results, 
+                                 data.table(target = t_var, buffer = dist, R2 = r2, RMSE = rmse))
+  }
+}
+
+# 결과 확인: 타겟별 성능 순 정렬
+print(final_bench_results[order(target, -R2)])
+```
+
+## Elastic Net
+
+```{r}
+library(glmnet)
+
+buffer_list <- sort(unique(clean_ml_data$buffer_size))
+targets <- c("PM10", "PM25")
+predictors <- c("precip", "pressure", "solar_rad", "temp_2m", "u_wind", "v_wind",
+                "month", "day_of_year", "is_weekend")
+
+# 최종 결과를 담을 통합 테이블
+final_bench_en_results <- data.table()
+
+for (t_var in targets) {
+  message(paste("\n### Target Pollutant:", t_var, " (Elastic Net) ###"))
+  
+  for (dist in buffer_list) {
+    message(paste(">>> Evaluating Buffer Size:", dist, "m"))
+    
+    # 1. 해당 버퍼 데이터 추출
+    sub_data <- clean_ml_data[buffer_size == dist]
+    
+    # 2. 시계열 분할 (Train: 2018-2022 / Test: 2023-2024)
+    train_idx <- which(sub_data$date_obj < as.IDate("2023-01-01"))
+    test_idx  <- which(sub_data$date_obj >= as.IDate("2023-01-01"))
+    
+    # 3. 데이터 포맷 변환 (Matrix 형태 필수)
+    x_train <- as.matrix(sub_data[train_idx, ..predictors])
+    y_train <- sub_data[[t_var]][train_idx]
+    x_test  <- as.matrix(sub_data[test_idx, ..predictors])
+    y_test  <- sub_data[[t_var]][test_idx]
+    
+    # 4. 모델 학습 (Elastic Net)
+    # alpha = 0.5 (Lasso와 Ridge의 절반), lambda는 교차검증 없이 기본값으로 시도하거나
+    # 속도를 위해 단순 회귀에 가까운 작은 lambda를 사용
+    fit_en <- glmnet(x_train, y_train, alpha = 0.5, family = "gaussian")
+    
+    # 5. 예측 및 평가 (가장 적절한 lambda 지점 선택)
+    # 여기서는 모델 경로 중 마지막(가장 규제가 적은) 값을 사용
+    preds <- as.vector(predict(fit_en, newx = x_test, s = min(fit_en$lambda)))
+    actuals <- y_test
+    
+    r2 <- cor(actuals, preds)^2
+    rmse <- sqrt(mean((actuals - preds)^2))
+    
+    # 6. 결과 누적
+    final_bench_en_results <- rbind(final_bench_en_results, 
+                                    data.table(target = t_var, buffer = dist, R2 = r2, RMSE = rmse))
+    
+    # 메모리 정리
+    rm(sub_data, x_train, y_train, x_test, y_test, fit_en); gc()
+  }
+}
+
+# 결과 확인
+message("\n[Elastic Net Benchmarking Results]")
+print(final_bench_en_results[order(target, -R2)])
+```
+
+## GAM (Generalized Additive Model)
+
+```{r}
+library(mgcv) # GAM 분석을 위한 패키지
+
+buffer_list <- sort(unique(clean_ml_data$buffer_size))
+targets <- c("PM10", "PM25")
+# GAM에서는 각 변수에 s()를 붙여 평활 함수(smooth term)로 정의
+# month와 day_of_year는 주기성을 고려하여 cc(cyclic cubic spline)를 사용할 수도 있으나, 
+# 여기서는 일반적인 s()를 사용합니다.
+predictors_gam <- c("s(precip)", "s(pressure)", "s(solar_rad)", "s(temp_2m)", 
+                    "s(u_wind)", "s(v_wind)", "s(month)", "s(day_of_year)")
+formula_base <- paste(predictors_gam, collapse = " + ")
+
+# 최종 결과를 담을 통합 테이블
+final_bench_gam_results <- data.table()
+
+for (t_var in targets) {
+  message(paste("\n### Target Pollutant:", t_var, " (GAM/BAM) ###"))
+  
+  for (dist in buffer_list) {
+    message(paste(">>> Evaluating Buffer Size:", dist, "m"))
+    
+    # 1. 해당 버퍼 데이터 추출
+    sub_data <- clean_ml_data[buffer_size == dist]
+    
+    # 2. 시계열 분할
+    train_data <- sub_data[date_obj < as.IDate("2023-01-01")]
+    test_data  <- sub_data[date_obj >= as.IDate("2023-01-01")]
+    
+    # 3. 모델 학습 (bam: 대용량 데이터 전용 GAM)
+    # discrete = TRUE 옵션을 통해 연산 속도를 비약적으로 향상시킴
+    fit_gam <- bam(
+      as.formula(paste(t_var, "~", formula_base, "+ is_weekend")),
+      data = train_data,
+      discrete = TRUE,
+      nthreads = parallel::detectCores() - 1
+    )
+    
+    # 4. 예측 및 평가
+    preds <- as.vector(predict(fit_gam, newdata = test_data))
+    actuals <- test_data[[t_var]]
+    
+    r2 <- cor(actuals, preds, use = "complete.obs")^2
+    rmse <- sqrt(mean((actuals - preds)^2, na.rm = TRUE))
+    
+    # 5. 결과 누적
+    final_bench_gam_results <- rbind(final_bench_gam_results, 
+                                     data.table(target = t_var, buffer = dist, R2 = r2, RMSE = rmse))
+    
+    rm(train_data, test_data, fit_gam); gc()
+  }
+}
+
+# 결과 확인
+message("\n[GAM/BAM Benchmarking Results]")
+print(final_bench_gam_results[order(target, -R2)])
+```
+
+## Random Forest
+
+```{r}
+library(ranger) # 고속 Random Forest 구현체
+
+buffer_list <- sort(unique(clean_ml_data$buffer_size))
+targets <- c("PM10", "PM25")
+predictors <- c("precip", "pressure", "solar_rad", "temp_2m", "u_wind", "v_wind",
+                "month", "day_of_year", "is_weekend")
+
+# 최종 결과를 담을 통합 테이블
+final_bench_rf_results <- data.table()
+
+for (t_var in targets) {
+  message(paste("\n### Target Pollutant:", t_var, " (Random Forest) ###"))
+  
+  for (dist in buffer_list) {
+    message(paste(">>> Evaluating Buffer Size:", dist, "m"))
+    
+    # 1. 해당 버퍼 데이터 추출
+    sub_data <- clean_ml_data[buffer_size == dist]
+    
+    # 2. 시계열 분할 (Train: 2018-2022 / Test: 2023-2024)
+    train_data <- sub_data[date_obj < as.IDate("2023-01-01")]
+    test_data  <- sub_data[date_obj >= as.IDate("2023-01-01")]
+    
+    # 3. 모델 학습 (ranger)
+    # num.trees: 100개로 설정 (XGBoost 100 rounds와 비교 가능하도록 설정)
+    # importance: 변수 중요도 계산 설정
+    fit_rf <- ranger(
+      formula = as.formula(paste(t_var, "~", paste(predictors, collapse = " + "))),
+      data = train_data,
+      num.trees = 100,
+      importance = "impurity",
+      verbose = FALSE,
+      seed = 123
+    )
+    
+    # 4. 예측 및 평가
+    preds <- predict(fit_rf, data = test_data)$predictions
+    actuals <- test_data[[t_var]]
+    
+    r2 <- cor(actuals, preds)^2
+    rmse <- sqrt(mean((actuals - preds)^2))
+    
+    # 5. 결과 누적
+    final_bench_rf_results <- rbind(final_bench_rf_results, 
+                                    data.table(target = t_var, buffer = dist, R2 = r2, RMSE = rmse))
+    
+    # 메모리 정리
+    rm(train_data, test_data, fit_rf); gc()
+  }
+}
+
+# 결과 확인: 타겟별 성능 순 정렬
+message("\n[Random Forest Benchmarking Results]")
+print(final_bench_rf_results[order(target, -R2)])
+```

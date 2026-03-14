@@ -6,3 +6,8 @@ container/*.sif
 .vscode
 **/.snakemake
 **/__pycache__
+daehoon/ERA5_Land/
+daehoon/extracted_climate_parquet/
+daehoon/extracted_climate_parquet/*m.parquet
+daehoon/raw_data_files/
+daehoon/.Rhistory

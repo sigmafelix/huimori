@@ -1,0 +1,161 @@
+---
+title: "download_kma1"
+format:
+  html:
+    theme: cosmo
+    toc: true
+    toc-depth: 3
+    toc-location: left
+    code-fold: show
+    code-summary: "코드 보기"
+    code-overflow: wrap
+    number-sections: true
+    smooth-scroll: true
+    embed-resources: true
+    df-print: paged
+    page-layout: full
+editor: visual
+---
+
+```{r}
+library(tidyverse)
+library(sf)
+library(data.table)
+library(terra)
+library(ncdf4)
+library(httr)
+library(exactextractr)
+library(future)
+library(future.apply)
+library(future.mirai)
+library(listenv)
+library(readxl)
+library(arrow)
+
+# 측정소 데이터
+
+file_path <- "raw_data_files/sites_history_cleaning_20250311.xlsx"
+sites <- read_excel(file_path)
+
+sites_2020 <- sites %>%
+  filter(year == 2020) %>%
+  select(TMSID, year, site_type, longitude_common, latitude_common, date_start, date_end)
+
+sites_2020_sf <- st_as_sf(sites_2020, 
+                     coords = c("longitude_common", "latitude_common"), 
+                     crs = 4326)
+```
+
+# 환경변수 데이터
+
+## KMA
+
+```{r}
+## =============================================================================
+## [변수 목록 정리 (KMA 고해상도 격자자료 500m)]
+## -----------------------------------------------------------------------------
+##    - ta     : 기온 (Temperature)
+##    - hm     : 상대습도 (Relative Humidity)
+##    - td     : 이슬점온도 (Dew Point Temperature)
+##    - ws_10m : 10분 평균 풍속 (Wind Speed at 10m)
+##    - pa     : 현지기압 (Station Pressure)
+##    - ps     : 해면기압 (Sea-level Pressure)
+##    - vs     : 시정 (Visibility)
+##    - ta_chi : 체감온도 (Apparent Temperature)
+##    - rn_day : 일강수량 (Daily Precipitation)
+## =============================================================================
+
+```
+
+```{r}
+# 1. 환경 설정 및 라이브러리 로드
+auth_key <- "ycvVaRBcRBuL1WkQXBQbFA"
+base_url <- "https://apihub-org.kma.go.kr/api/typ01/url/sfc_grid_nc_down.php"
+save_root <- "kma_daily_nc" # 일평균 자료 저장 경로
+
+if (!dir.exists(save_root)) dir.create(save_root, recursive = TRUE)
+
+obs_list <- c("ta", "hm", "td")
+years <- 2018:2024
+
+# 2. 메인 루프 실행
+for (obs in obs_list) {
+  var_path <- file.path(save_root, obs)
+  if (!dir.exists(var_path)) dir.create(var_path, recursive = TRUE)
+  
+  for (yr in years) {
+    for (mon in 1:12) {
+      start_date <- as.Date(paste(yr, mon, "01", sep = "-"))
+      end_date <- seq(start_date, by = "month", length.out = 2)[2] - 1
+      target_dates <- seq(start_date, end_date, by = "day")
+      
+      message(paste("\n>>> [작업 시작] 변수:", obs, "|", yr, "년", mon, "월"))
+      
+      for (date in as.character(target_dates)) {
+        formatted_date <- gsub("-", "", date)
+        daily_save_name <- paste0(obs, "_daily_", formatted_date, ".nc")
+        daily_save_path <- file.path(var_path, daily_save_name)
+        
+        if (file.exists(daily_save_path)) next
+        
+        time_steps <- seq(0, 1435, by = 5)
+        # 지연 연산을 위해 임시 파일 경로를 저장할 리스트 생성
+        daily_files <- c()
+        
+        cat(paste0("[", date, "] 다운로드 중: "))
+        
+        for (ts in time_steps) {
+          tm_str <- paste0(formatted_date, sprintf("%02d%02d", ts %/% 60, ts %% 60))
+          # tempfile은 루프가 끝날 때까지 유지되어야 하므로 경로를 리스트에 보관
+          temp_nc <- tempfile(pattern = paste0("tmp_", tm_str, "_"), fileext = ".nc") 
+          
+          api_url <- paste0(base_url, "?obs=", obs, "&tm=", tm_str, "&authKey=", auth_key)
+          
+          res <- tryCatch({
+            GET(api_url, config(ssl_verifypeer = FALSE), 
+                write_disk(temp_nc, overwrite = TRUE), timeout(15))
+          }, error = function(e) NULL)
+          
+          # 파일 검증
+          if (!is.null(res) && status_code(res) == 200 && file.info(temp_nc)$size > 500) {
+            daily_files <- c(daily_files, temp_nc)
+            cat(".")
+          } else {
+            if (file.exists(temp_nc)) unlink(temp_nc)
+          }
+        }
+        
+        # 3. 일괄 연산
+        if (length(daily_files) > 0) {
+          cat("\n    => 일평균 산출 및 후처리 중...")
+          
+          # 모든 파일을 한 번에 스택으로 읽기 (Scale 10 적용 전의 정수 상태)
+          r_stack <- rast(daily_files)
+          
+          # 1. 먼저 평균 계산 (na.rm = TRUE로 결측치 제외)
+          r_stack[r_stack <= -990] <- NA 
+          daily_mean <- mean(r_stack, na.rm = TRUE)
+          
+          # 2. 최종 결과값에만 Scale 10 적용
+          daily_mean <- daily_mean / 10
+          
+          # 3. 저장 (압축 레벨 9 적용)
+          writeCDF(daily_mean, daily_save_path, overwrite = TRUE, 
+                   varname = obs, compression = 9)
+          
+          cat(paste0(" [완료: ", daily_save_name, "]\n"))
+          
+          # 사용한 임시 파일 모두 삭제
+          unlink(daily_files)
+        } else {
+          cat(" [데이터 없음]\n")
+        }
+        
+        # 메모리 정리
+        rm(daily_files, r_stack, daily_mean)
+        gc()
+      }
+    }
+  }
+}
+```

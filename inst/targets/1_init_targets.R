@@ -5,9 +5,9 @@ list_configs <-
       name = chr_dir_data,
       command = {
         if (Sys.getenv("USER") == "isong") {
-          file.path("/mnt/s", "Korea")
+          file.path("/mnt/hdd001", "Korea")
         } else if (Sys.getenv("USER") == "songlab") {
-          file.path("/mnt", "hdd001", "Korea")
+          file.path("/mnt/hdd001", "Korea")
         } else {
           file.path(Sys.getenv("HOME"), "Documents")
         }
@@ -19,9 +19,9 @@ list_configs <-
         if (Sys.getenv("USER") == "isong") {
           file.path(Sys.getenv("HOME"), "GitHub", "histmap-ko")
         } else if (Sys.getenv("USER") == "songlab") {
-          file.path("/members", "songlab", "GitHub", "histmap-ko")
+          file.path(Sys.getenv("HOME"), "histmap-ko")
         } else {
-          file.path(Sys.getenv("HOME"), "Documents", "GitHub", "histmap-ko")
+          file.path(Sys.getenv("HOME"), "Documents")
         }
       }
     ),

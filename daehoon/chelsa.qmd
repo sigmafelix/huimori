@@ -1,0 +1,230 @@
+---
+title: "Chelsa Download"
+format:
+  html:
+    theme: cosmo
+    toc: true
+    toc-depth: 3
+    toc-location: left
+    code-fold: show
+    code-summary: "코드 보기"
+    code-overflow: wrap
+    number-sections: true
+    smooth-scroll: true
+    embed-resources: true
+    df-print: paged
+    page-layout: full
+editor: visual
+---
+
+```{r}
+library(Rchelsa)
+library(tidyverse)
+library(terra)
+library(ncdf4)
+library(future)
+library(future.apply)
+library(future.mirai)
+```
+
+```{r}
+inv <- chelsaInventory()
+
+# 어떤 dataset들이 있는지
+unique(inv$dataset)
+
+# chelsa-daily만 필터
+inv_daily <- subset(inv, dataset == "chelsa_daily" &  year >= 2018 &  year <= 2024)
+inv_daily
+
+
+```
+
+```{r}
+#| paged.print: false
+
+table(inv_daily$year)
+
+aggregate(
+  variable ~ year,
+  inv_daily,
+  function(x) sort(unique(x))
+)
+
+```
+
+Total Cloud Cover Percentage(`clt`)	percent	
+Total cloud area fraction (reported as a percentage) for the whole atmospheric column as seen from the surface or the top of the atmosphere. Includes both large-scale and convective cloud.
+
+Near-Surface Relative Humidity(`hurs`) percent
+The relative humidity with respect to liquid water for T> 0 C and with respect to ice for T
+
+Precipitation(`pr`)	kg m-2 day-1	
+includes both liquid and solid phases
+
+Surface Air Pressure(`ps`)	hPa	
+surface pressure (not mean sea-level pressure)
+
+Surface Downwelling Shortwave Flux in Air(`rsds`)	W m-2	
+Surface solar irradiance for UV calculations.
+
+Near-Surface Wind Speed(`sfcWind`)	m s-1	
+near-surface (usually 10 meters) wind speed.
+
+Daily Mean Near-Surface Air Temperature(`tas`)	K	
+near-surface (usually 2 meter) air temperature
+
+Daily Maximum Near-Surface Air Temperature(tasmax)	K	
+maximum near-surface (usually 2 meter) air temperature
+
+Daily Minimum Near-Surface Air Temperature(tasmin)	K	
+minimum near-surface (usually 2 meter) air temperature
+
+Air Temperature Lapse Rate(tz)	K m-1	
+Rate of change in air temperature with altitude calculated over centennial period
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+```{r}
+inv_2020 <- subset(inv, dataset == "chelsa_daily" &  year == 2020)
+inv_2020
+```
+
+
+```{r}
+pr_1 <- getChelsa("pr", dataset="CHELSA-daily",
+                  extent = c(124, 132, 33, 39),
+                  startdate = as.Date("2020-01-01"),
+                  enddate = as.Date("2020-01-02"))
+pr_1
+
+tas_1 <- getChelsa("tas", dataset="CHELSA-daily",
+                  extent = c(124, 132, 33, 39),
+                  startdate = as.Date("2020-01-01"),
+                  enddate = as.Date("2020-01-02"))
+
+plot(pr_1, col = rev(terrain.colors(10)), main = "Precipitation")
+plot(tas_1, col = rev(heat.colors(10)), main = "Average Temperature")
+```
+
+```{r}
+# 1. 디렉토리 설정
+save_path <- "Chelsa"
+if (!dir.exists(save_path)) dir.create(save_path, recursive = TRUE)
+
+# 2. 병렬 처리 계획 (워커 3개 유지)
+plan(mirai_multisession, workers = 3)
+
+# 3. 분석 환경 설정
+target_year <- 2020
+variables   <- c("pr", "rsds", "tas", "tasmax", "tasmin")
+extent_val  <- c(124, 132, 33, 39) # 한국 주변 영역
+
+# 4. 월별 병렬 루프
+results <- future_lapply(1:12, function(m) {
+  
+  # 날짜 계산
+  start_dt <- as.Date(sprintf("%d-%02d-01", target_year, m))
+  end_dt   <- ceiling_date(start_dt, "month") - days(1)
+  dates    <- seq(start_dt, end_dt, by = "day")
+  n_days   <- length(dates)
+  
+  # 파일명 및 전체 경로 설정
+  file_nm   <- sprintf("CHELSA_%d_%02d.nc", target_year, m)
+  full_path <- file.path(save_path, file_nm)
+  
+  tryCatch({
+    monthly_data_list <- list()
+    
+    for (v in variables) {
+      # 데이터 다운로드 시도
+      ds <- try(getChelsa(v, 
+                          dataset = "CHELSA-daily", 
+                          extent = extent_val,
+                          startdate = start_dt, 
+                          enddate = end_dt), silent = TRUE)
+      
+      # 성공 여부 확인 및 데이터 처리
+      if (!inherits(ds, "try-error") && is(ds, "SpatRaster")) {
+        names(ds) <- rep(v, nlyr(ds))
+        time(ds)  <- dates
+        monthly_data_list[[v]] <- ds
+      } else {
+        # 실패 시 NA 래스터 생성 (공간 구조 유지)
+        na_template <- rast(xmin=extent_val[1], xmax=extent_val[2], 
+                            ymin=extent_val[3], ymax=extent_val[4], 
+                            res=0.008333333, crs="EPSG:4326")
+        
+        # 일수(n_days)만큼 레이어 생성 후 시간 정보 주입
+        na_stack <- rast(lapply(1:n_days, function(x) na_template))
+        names(na_stack) <- rep(v, n_days)
+        time(na_stack)  <- dates
+        monthly_data_list[[v]] <- na_stack
+      }
+    }
+    
+    # 변수들을 하나의 SpatDataSet으로 결합
+    combined_sds <- sds(monthly_data_list)
+    
+    # netCDF 파일 쓰기 (최고 압축 적용)
+    writeCDF(combined_sds, 
+             filename = full_path, 
+             zname = "time", 
+             compression = 9, 
+             overwrite = TRUE)
+    
+    # 메모리 해제
+    rm(monthly_data_list, combined_sds)
+    gc()
+    
+    return(paste("Success:", full_path))
+    
+  }, error = function(e) {
+    return(paste("Error in month", m, ":", e$message))
+  })
+}, future.seed = TRUE)
+
+# 결과 출력
+cat(unlist(results), sep = "\n")
+```
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+

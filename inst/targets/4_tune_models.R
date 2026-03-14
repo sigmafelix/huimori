@@ -38,15 +38,15 @@ list_fit_models <-
       pattern = map(chr_outcome),
       iteration = "list"
     )
-    ,
-    targets::tar_target(
-      name = list_fit_tmb,
-      command = {
-        huimori::fit_tmb(
-
-        )
-      }
-    )
+    # ,
+    # targets::tar_target(
+    #   name = list_fit_tmb,
+    #   command = {
+    #     huimori::fit_tmb(
+    # 
+    #     )
+    #   }
+    # )
   )
 
 
@@ -298,3 +298,11 @@ list_pred_process <-
       pattern = map(workflow_fit_incorrect)
     )
   )
+
+
+# ----------------------------------------------------------------
+# 변경 log 기록(dhnyu)
+## 2026.01.31
+
+### DAG 상에서 최종 객체와 직접적으로 이어지지 않는 target 체크
+#### list_fit_tmb 주석처리
