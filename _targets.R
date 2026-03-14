@@ -32,7 +32,7 @@ targets::tar_option_set(
     c("targets",# "geotargets", 
       "terra", "sf", "dplyr", "collapse",
       "data.table", "tibble", "tune", "yardstick", "workflows",
-      "recipes", "dials",
+      "recipes", "dials", "lubridate", "rgee",
       "chopin", "mirai", "parsnip", "finetune", "huimori", "nanoparquet",
       "readxl", "bonsai", "lightgbm", "xgboost", "crew"),
   format = "qs", # Optionally set the default storage format. qs is fast.

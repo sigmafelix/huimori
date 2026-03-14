@@ -98,6 +98,7 @@ list_process_site <-
         sites_ch
       }
     ),
+    # annualize the monitor data (correct coordinates)
     targets::tar_target(
       name = sf_monitors_correct,
       command = {
@@ -152,6 +153,15 @@ list_process_site <-
           dplyr::filter(!sf::st_is_empty(geometry))
         sites_sf
 
+      }
+    ),
+    # full spacetime data frame for unique TMSID-date combinations
+    targets::tar_target(
+      name = sf_monitors_correct_full,
+      command = {
+        sfm_corr <- sf_monitors_correct |>
+          dplyr::filter(date_start <= date_end)
+        extend_grid(data = sfm_corr)
       }
     ),
     targets::tar_target(
@@ -236,6 +246,96 @@ list_process_site <-
     targets::tar_target(
       name = dt_asos,
       command = nanoparquet::read_parquet(chr_asos_file)
+    ),
+    targets::tar_target(
+      name = df_feat_correct_wind_daily,
+      command = {
+        points_use <- sf_monitors_correct |>
+          dplyr::filter(!sf::st_is_empty(geometry))
+        start_date <- min(dt_measurements$date)
+        end_date <- max(dt_measurements$date)
+
+        gee_extract_daily_wind(
+          points_sf = points_use,
+          start_date = start_date,
+          end_date = end_date,
+          buffer_m = 250,
+          scale = 1000
+        )
+      }
+    ),
+    targets::tar_target(
+      name = df_feat_correct_wind_annual,
+      command = {
+        df_feat_correct_wind_daily |>
+          dplyr::mutate(year = lubridate::year(date)) |>
+          dplyr::group_by(TMSID, TMSID2, year) |>
+          dplyr::summarize(
+            wind_speed_10m = mean(wind_speed_10m, na.rm = TRUE),
+            wind_dir_deg = mean(wind_dir_deg, na.rm = TRUE),
+            .groups = "drop"
+          )
+      }
+    ),
+    targets::tar_target(
+      name = df_feat_correct_building_density,
+      command = {
+        points_use <- sf_monitors_correct |>
+          dplyr::filter(!sf::st_is_empty(geometry))
+        yrs <- sort(unique(points_use$year))
+
+        gee_extract_building_density(
+          points_sf = points_use,
+          years = yrs,
+          buffer_m = 100,
+          scale = 30
+        )
+      }
+    ),
+    targets::tar_target(
+      name = df_feat_incorrect_wind_daily,
+      command = {
+        points_use <- sf_monitors_incorrect |>
+          dplyr::filter(!sf::st_is_empty(geometry))
+        start_date <- min(dt_measurements$date)
+        end_date <- max(dt_measurements$date)
+
+        gee_extract_daily_wind(
+          points_sf = points_use,
+          start_date = start_date,
+          end_date = end_date,
+          buffer_m = 250,
+          scale = 1000
+        )
+      }
+    ),
+    targets::tar_target(
+      name = df_feat_incorrect_wind_annual,
+      command = {
+        df_feat_incorrect_wind_daily |>
+          dplyr::mutate(year = lubridate::year(date)) |>
+          dplyr::group_by(TMSID, TMSID2, year) |>
+          dplyr::summarize(
+            wind_speed_10m = mean(wind_speed_10m, na.rm = TRUE),
+            wind_dir_deg = mean(wind_dir_deg, na.rm = TRUE),
+            .groups = "drop"
+          )
+      }
+    ),
+    targets::tar_target(
+      name = df_feat_incorrect_building_density,
+      command = {
+        points_use <- sf_monitors_incorrect |>
+          dplyr::filter(!sf::st_is_empty(geometry))
+        yrs <- sort(unique(points_use$year))
+
+        gee_extract_building_density(
+          points_sf = points_use,
+          years = yrs,
+          buffer_m = 100,
+          scale = 30
+        )
+      }
     ),
     targets::tar_target(
       name = ras_landuse_freq,
@@ -330,6 +430,7 @@ list_process_split <-
         crew = targets::tar_resources_crew(controller = "controller_20")
       )
     ),
+    # Branched data for correct coordinates
     targets::tar_target(
       name = sf_grid_correct_split,
       command = {
@@ -377,6 +478,7 @@ list_process_split <-
 
 list_process_feature <-
   list(
+    ### F01. Distance to the nearest road ####
     targets::tar_target(
       name = df_feat_correct_d_road,
       command = {
@@ -407,6 +509,7 @@ list_process_feature <-
         df_monitors_dist_att
       }
     ),
+    ### F02. DSM (surface elevation) ####
     targets::tar_target(
       name = df_feat_correct_dsm,
       command = chopin::extract_at(
@@ -417,6 +520,7 @@ list_process_feature <-
       ) |>
         dplyr::rename(dsm = mean)
     ),
+    ### F03. DEM (ground elevation) ####
     targets::tar_target(
       name = df_feat_correct_dem,
       command = chopin::extract_at(
@@ -427,6 +531,7 @@ list_process_feature <-
       ) |>
         dplyr::rename(dem = mean)
     ),
+    ### F04. Land use fractions ####
     targets::tar_target(
       name = df_feat_correct_landuse,
       command = {
@@ -455,6 +560,7 @@ list_process_feature <-
         crew = targets::tar_resources_crew(controller = "controller_20")
       )
     ),
+    ### F05. MTPI (multiscale terrain position index) ####
     targets::tar_target(
       name = df_feat_correct_mtpi,
       command = {
@@ -467,6 +573,7 @@ list_process_feature <-
         ) |> dplyr::rename(mtpi = mean) 
       }
     ),
+    ### F06. MTPI at 1km buffer ####
     targets::tar_target(
       name = df_feat_correct_mtpi_1km,
       command = {
@@ -479,6 +586,7 @@ list_process_feature <-
         ) |> dplyr::rename(mtpi_1km = mean) 
       }
     ),
+    ### F07. Emittors ####
     targets::tar_target(
       name = sf_emission_locs,
       command = {
@@ -561,6 +669,152 @@ list_process_feature <-
         result
       }
     ),
+    ### F08. Aerosol Optical Depth (daily) ####
+    targets::tar_target(
+      name = chr_aod_date_seq,
+      command = {
+        seq(
+          from = as.Date("2010-01-01"),
+          to = as.Date("2023-12-31"),
+          by = "30 days"
+        )
+      }
+    ),
+    targets::tar_target(
+      name = chr_aod_date_chunks,
+      command = {
+        start_dates <- chr_aod_date_seq
+        end_dates <- c(
+          chr_aod_date_seq[-1] - 1,
+          as.Date("2023-12-31")
+        )
+        df_dates <-
+          data.frame(
+            start_date = start_dates,
+            end_date = end_dates
+          ) |>
+          dplyr::mutate(
+            chunk_id = dplyr::row_number()
+          ) |>
+          dplyr::group_by(chunk_id) |>
+          targets::tar_group()
+      },
+      iteration = "group"
+    ),
+    targets::tar_target(
+      name = df_feat_correct_aod,
+      command = {
+        date_pattern <- strftime(
+          seq(
+            chr_aod_date_chunks$start_date,
+            chr_aod_date_chunks$end_date,
+            by = "day"
+          ),
+          "%Y%j",
+        )
+
+        aod_files <- file.path(
+          chr_dir_aod,
+          paste0("MCD19A2_Daily_Composite_", date_pattern, ".tif")
+        )
+        aod_files <- aod_files[file.exists(aod_files)]
+
+        result <- purrr::map_df(
+          aod_files,
+          function(file) {
+            aod_ras <- terra::rast(file)
+            extracted <- exactextractr::exact_extract(
+              x = aod_ras,
+              y = sf_monitors_correct,
+              fun = "mean",
+              weights = NULL
+            )
+            data.frame(
+              TMSID = sf_monitors_correct$TMSID,
+              TMSID2 = sf_monitors_correct$TMSID2,
+              date = as.Date(basename(file), format = "MCD19A2_Daily_Composite_%Y%j.tif"),
+              aod = extracted
+            )
+          }
+        )
+
+        result |>
+          dplyr::group_by(TMSID, TMSID2) |>
+          dplyr::mutate(year = lubridate::year(date)) |>
+          dplyr::summarize(
+            aod = mean(aod, na.rm = TRUE),
+            .groups = "drop_last"
+          ) |>
+          dplyr::ungroup()
+      },
+      pattern = map(chr_aod_date_chunks),
+      iteration = "list"
+    ),
+    ### F08A. Aerosol Optical Depth (annual) ####
+    targets::tar_target(
+      name = int_aod_year_chunks,
+      command = {
+        yrs <-
+          strftime(chr_date_range, "%Y") |>
+          as.integer()
+        yrs_vec <- seq(yrs[1], yrs[2], by = 1)
+        yrs_vec
+      },
+      iteration = "vector"
+    ),
+    targets::tar_target(
+      name = df_feat_correct_year_aod,
+      command = {
+        year <- int_aod_year_chunks
+        aod_files <- grep(
+          paste0("MCD19A2_Daily_Composite_", year, "[0-9]{3,3}.tif$"),
+          chr_dir_aod,
+          value = TRUE
+        )
+
+        r_list <- lapply(aod_files, terra::rast)
+
+        template <- r_list[[1]]
+
+        aligned_list <- lapply(r_list, function(r) {
+          if (terra::ext(r) == ext(template)) {
+            return(r)
+          } else {
+            # extend() adds NA padding if 'r' is smaller than the template
+            # crop() trims 'r' if it is larger than the template
+            r_extended <- terra::extend(r, template)
+            return(terra::crop(r_extended, template))
+          }
+        })
+
+        aod_ras <- terra::rast(aligned_list)
+
+        # read
+        sf_monitors_correct_buff <-
+          sf_monitors_correct |>
+          dplyr::filter(year == int_aod_year_chunks) |>
+          sf::st_transform(terra::crs(template)) |>
+          sf::st_buffer(dist = 0.001, nQuadSegs = 90L)
+
+        aod_yr <- terra::app(
+          aod_ras,
+          fun = function(x) median(x, na.rm = TRUE),
+          cores = 4L
+        )
+        extracted <- exactextractr::exact_extract(
+          x = aod_yr,
+          y = sf_monitors_correct_buff,
+          fun = "mean",
+          weights = NULL,
+          force_df = TRUE,
+          append_cols = c("TMSID", "TMSID2", "year")
+        )
+        extracted
+      },
+      pattern = map(int_aod_year_chunks),
+      iteration = "list"
+    ),
+    ### F09. Merge features ####
     targets::tar_target(
       name = df_feat_correct_merged,
       command = {
@@ -721,14 +975,25 @@ list_process_feature <-
           dplyr::bind_cols(
             df_feat_incorrect_landuse
           ) %>%
+          dplyr::left_join(
+            df_feat_incorrect_building_density,
+            by = c("TMSID", "TMSID2", "year")
+          ) %>%
+          dplyr::left_join(
+            df_feat_incorrect_wind_annual,
+            by = c("TMSID", "TMSID2", "year")
+          ) %>%
           dplyr::mutate(
             dsm = unlist(df_feat_incorrect_dsm),
-            dem = unlist(df_feat_incorrect_dem),
+            dem = unlist(df_feat_incorrect_dem)
           ) %>%
           dplyr::mutate(
             d_road = as.numeric(d_road) / 1000,
             dsm = as.numeric(dsm),
             dem = as.numeric(dem),
+            building_density = as.numeric(building_density),
+            wind_speed_10m = as.numeric(wind_speed_10m),
+            wind_dir_deg = as.numeric(wind_dir_deg),
             n_emittors_watershed = unlist(df_feat_correct_emittors$n_emittors_watershed),
             mtpi = unlist(df_feat_incorrect_mtpi),
             mtpi_1km = unlist(df_feat_incorrect_mtpi_1km)

@@ -158,3 +158,205 @@ auto_grid <-
     pad_res <- pad_res[x, ]
     return(pad_res)
   }
+
+
+#' Initialize Earth Engine once per worker
+#' @param email optional email used for rgee auth; defaults to GEE_EMAIL env var when set
+#' @param drive logical; enable Drive export
+#' @param gcs logical; enable GCS export
+#' @return TRUE invisibly when initialization completes
+#' @export
+gee_init <- function(email = Sys.getenv("GEE_EMAIL", unset = NULL), drive = TRUE, gcs = FALSE) {
+  rgee::ee_Initialize(
+    email = if (is.null(email) || identical(email, "")) NULL else email,
+    drive = drive,
+    gcs = gcs,
+    quiet = TRUE
+  )
+  invisible(TRUE)
+}
+
+
+#' Convert sf points to EE FeatureCollection with optional buffer
+#' @noRd
+gee_prepare_points <- function(points_sf, buffer_m = 0) {
+  pts <- sf::st_transform(points_sf, 4326)
+  pts_fc <- rgee::sf_as_ee(pts)
+  if (buffer_m > 0) {
+    pts_fc <- pts_fc$map(
+      rgee::ee_utils_pyfunc(function(f) f$buffer(buffer_m))
+    )
+  }
+  pts_fc
+}
+
+
+#' Daily wind (10 m) time series from ERA5-Land at point locations
+#' @param points_sf sf POINT object with properties to keep (e.g., TMSID, TMSID2)
+#' @param start_date,end_date Date or character range
+#' @param buffer_m numeric; buffer radius in meters before sampling
+#' @param scale numeric; sampling scale in meters
+#' @param via character; extraction backend for rgee::ee_extract_timeseries
+#' @param container optional Drive/GCS folder when via != "getInfo"
+#' @return tibble with point identifiers, date, wind_speed_10m, wind_dir_deg
+#' @export
+gee_extract_daily_wind <- function(
+  points_sf,
+  start_date,
+  end_date,
+  buffer_m = 250,
+  scale = 1000,
+  via = Sys.getenv("EE_VIA", unset = "getInfo"),
+  container = Sys.getenv("EE_DRIVE_FOLDER", unset = NULL)
+) {
+  gee_init()
+  ee <- rgee::ee
+
+  pts_fc <- gee_prepare_points(points_sf, buffer_m = buffer_m)
+
+  wind_ic <-
+    ee$ImageCollection("ECMWF/ERA5_LAND/HOURLY")$
+    filterDate(as.character(start_date), as.character(end_date))$
+    select(c("u_component_of_wind_10m", "v_component_of_wind_10m"))$
+    map(
+      rgee::ee_utils_pyfunc(function(img) {
+        u <- img$select("u_component_of_wind_10m")
+        v <- img$select("v_component_of_wind_10m")
+        speed <- u$hypot(v)$rename("wind_speed_10m")
+        direction <- u$atan2(v)$multiply(180 / pi)$add(180)$rename("wind_dir_deg")
+        img$addBands(speed)$addBands(direction)$
+          select(c("wind_speed_10m", "wind_dir_deg"))$
+          copyProperties(img, list("system:time_start"))
+      })
+    )
+
+  ts_sf <- rgee::ee_extract_timeseries(
+    x = wind_ic,
+    y = pts_fc,
+    scale = scale,
+    reducer = ee$Reducer$mean(),
+    via = via,
+    container = container,
+    sf = TRUE
+  )
+
+  ts_tbl <- ts_sf |>
+    sf::st_drop_geometry() |>
+    tibble::as_tibble()
+
+  point_cols <- intersect(names(points_sf), names(ts_tbl))
+
+  ts_tbl |>
+    dplyr::rename(datetime = .time) |>
+    dplyr::mutate(
+      date = as.Date(datetime),
+      wind_speed_10m = as.numeric(wind_speed_10m),
+      wind_dir_deg = as.numeric(wind_dir_deg)
+    ) |>
+    dplyr::select(dplyr::all_of(point_cols), date, wind_speed_10m, wind_dir_deg)
+}
+
+
+#' Annual building density (impervious fraction) from GAIA at point locations
+#' @param points_sf sf POINT object with properties to keep
+#' @param years integer vector of years to extract
+#' @param buffer_m numeric; buffer radius in meters
+#' @param scale numeric; sampling scale in meters
+#' @param dataset character; EE ImageCollection id (default GAIA v10)
+#' @param band character; band name representing built/impervious cover
+#' @param via character; extraction backend for rgee::ee_extract_timeseries
+#' @param container optional Drive/GCS folder when via != "getInfo"
+#' @return tibble with point identifiers, year, building_density
+#' @export
+gee_extract_building_density <- function(
+  points_sf,
+  years,
+  buffer_m = 100,
+  scale = 30,
+  dataset = "Tsinghua/FROM-GLC/GAIA/v10",
+  band = "built",
+  via = Sys.getenv("EE_VIA", unset = "getInfo"),
+  container = Sys.getenv("EE_DRIVE_FOLDER", unset = NULL)
+) {
+  gee_init()
+  ee <- rgee::ee
+
+  yrs <- sort(unique(as.integer(years)))
+  pts_fc <- gee_prepare_points(points_sf, buffer_m = buffer_m)
+
+  yearly_imgs <- ee$ImageCollection(
+    ee$List(yrs)$map(
+      rgee::ee_utils_pyfunc(function(y) {
+        year_num <- ee$Number(y)
+        img_year <- ee$ImageCollection(dataset)$
+          filter(ee$Filter$calendarRange(year_num, year_num, "year"))$
+          select(band)$
+          mean()
+        img_year$rename("building_density")$
+          set("system:time_start", ee$Date$fromYMD(year_num, 1, 1)$millis())
+      })
+    )
+  )
+
+  bd_sf <- rgee::ee_extract_timeseries(
+    x = yearly_imgs,
+    y = pts_fc,
+    scale = scale,
+    reducer = ee$Reducer$mean(),
+    via = via,
+    container = container,
+    sf = TRUE
+  )
+
+  bd_tbl <- bd_sf |>
+    sf::st_drop_geometry() |>
+    tibble::as_tibble()
+
+  point_cols <- intersect(names(points_sf), names(bd_tbl))
+
+  bd_tbl |>
+    dplyr::rename(date = .time) |>
+    dplyr::mutate(
+      year = lubridate::year(date),
+      building_density = as.numeric(building_density)
+    ) |>
+    dplyr::select(dplyr::all_of(point_cols), year, building_density)
+}
+
+
+#' Extend space-time data.frame into full grid using start and end dates
+#'
+#' It takes a data frame with columns TMSID2, TMSID, date_s
+#' then for each unique TMSID2-TMSID pair, it generates a complete
+#' sequence of dates from date_start and date_end values.
+#' This ensures that the resulting data frame
+#' has a complete and unique grid of TMSID2, TMSID, and date_s,
+#' which is essential for calculation while avoiding redundant rows.
+#'
+#' @param data data.frame with columns TMSID2, TMSID, and date_s
+#' @return data.frame with complete grid of TMSID2, TMSID, and date_s
+#' @importFrom dplyr select group_by rowwise transmute ungroup
+#' @importFrom tidyr unnest
+#' @export
+extend_grid <- function(data) {
+  time_zone <- sessionInfo()[["tzone"]]
+  data |>
+    dplyr::select(TMSID2, TMSID, date_start, date_end) |>
+    unique() |>
+    dplyr::group_by(TMSID2, TMSID) |>
+    dplyr::rowwise() |>
+    dplyr::transmute(
+      date_s =
+      list(
+        seq.Date(
+          from = as.Date(date_start, tz = time_zone),
+          to = as.Date(date_end, tz = time_zone),
+          by = "day"
+        )
+      )
+    ) |>
+    dplyr::ungroup() |>
+    tidyr::unnest(c("date_s")) -> grid
+
+  grid
+}

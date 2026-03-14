@@ -377,7 +377,8 @@ gw_emittors <-
             }
             w <- w * weight[as.integer(rownames(target_clip))]
             if (sum(w) != 0) {
-              gw_emission[idx_in_clip[i]] <- sum(target_clip$emission * w) / sum(w)
+              gw_emission[idx_in_clip[i]] <-
+                sum(target_clip$emission * w) / sum(w)
             }
           }
         }
@@ -386,3 +387,5 @@ gw_emittors <-
     input$gw_emission <- gw_emission
     return(sf::st_drop_geometry(input))
   }
+
+

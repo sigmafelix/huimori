@@ -6,7 +6,7 @@ list_configs <-
       command = {
         if (Sys.getenv("USER") == "isong") {
           file.path("/mnt/hdd001", "Korea")
-        } else if (Sys.getenv("USER") == "dhnyu") {
+        } else if (Sys.getenv("USER") == "songlab") {
           file.path("/mnt/hdd001", "Korea")
         } else {
           file.path(Sys.getenv("HOME"), "Documents")
@@ -18,7 +18,7 @@ list_configs <-
       command = {
         if (Sys.getenv("USER") == "isong") {
           file.path(Sys.getenv("HOME"), "GitHub", "histmap-ko")
-        } else if (Sys.getenv("USER") == "dhnyu") {
+        } else if (Sys.getenv("USER") == "songlab") {
           file.path(Sys.getenv("HOME"), "histmap-ko")
         } else {
           file.path(Sys.getenv("HOME"), "Documents")
@@ -26,15 +26,8 @@ list_configs <-
       }
     ),
     targets::tar_target(
-      name = chr_dir_climate,
-      command = {
-        if (Sys.getenv("USER") == "isong") {
-          file.path("/mnt/hdd001", "huimori")
-        } else if (Sys.getenv("USER") == "dhnyu") {
-          file.path("/mnt/hdd001", "huimori")
-        } else {
-          file.path(Sys.getenv("HOME"), "Documents")
-        }
-      }
+      name = chr_date_range,
+      # this command should be modified to adjust the range of prediction
+      command = c(as.Date("2019-01-01"), as.Date("2023-12-31"))
     )
   )
