@@ -697,55 +697,55 @@ list_process_feature <-
       },
       iteration = "group"
     ),
-    targets::tar_target(
-      name = df_feat_correct_aod,
-      command = {
-        date_pattern <- strftime(
-          seq(
-            chr_aod_date_chunks$start_date,
-            chr_aod_date_chunks$end_date,
-            by = "day"
-          ),
-          "%Y%j",
-        )
+    # targets::tar_target(
+    #   name = df_feat_correct_aod,
+    #   command = {
+    #     date_pattern <- strftime(
+    #       seq(
+    #         chr_aod_date_chunks$start_date,
+    #         chr_aod_date_chunks$end_date,
+    #         by = "day"
+    #       ),
+    #       "%Y%j",
+    #     )
 
-        aod_files <- file.path(
-          chr_dir_aod,
-          paste0("MCD19A2_Daily_Composite_", date_pattern, ".tif")
-        )
-        aod_files <- aod_files[file.exists(aod_files)]
+    #     aod_files <- file.path(
+    #       chr_dir_aod,
+    #       paste0("MCD19A2_Daily_Composite_", date_pattern, ".tif")
+    #     )
+    #     aod_files <- aod_files[file.exists(aod_files)]
 
-        result <- purrr::map_df(
-          aod_files,
-          function(file) {
-            aod_ras <- terra::rast(file)
-            extracted <- exactextractr::exact_extract(
-              x = aod_ras,
-              y = sf_monitors_correct,
-              fun = "mean",
-              weights = NULL
-            )
-            data.frame(
-              TMSID = sf_monitors_correct$TMSID,
-              TMSID2 = sf_monitors_correct$TMSID2,
-              date = as.Date(basename(file), format = "MCD19A2_Daily_Composite_%Y%j.tif"),
-              aod = extracted
-            )
-          }
-        )
+    #     result <- purrr::map_df(
+    #       aod_files,
+    #       function(file) {
+    #         aod_ras <- terra::rast(file)
+    #         extracted <- exactextractr::exact_extract(
+    #           x = aod_ras,
+    #           y = sf_monitors_correct,
+    #           fun = "mean",
+    #           weights = NULL
+    #         )
+    #         data.frame(
+    #           TMSID = sf_monitors_correct$TMSID,
+    #           TMSID2 = sf_monitors_correct$TMSID2,
+    #           date = as.Date(basename(file), format = "MCD19A2_Daily_Composite_%Y%j.tif"),
+    #           aod = extracted
+    #         )
+    #       }
+    #     )
 
-        result |>
-          dplyr::group_by(TMSID, TMSID2) |>
-          dplyr::mutate(year = lubridate::year(date)) |>
-          dplyr::summarize(
-            aod = mean(aod, na.rm = TRUE),
-            .groups = "drop_last"
-          ) |>
-          dplyr::ungroup()
-      },
-      pattern = map(chr_aod_date_chunks),
-      iteration = "list"
-    ),
+    #     result |>
+    #       dplyr::group_by(TMSID, TMSID2) |>
+    #       dplyr::mutate(year = lubridate::year(date)) |>
+    #       dplyr::summarize(
+    #         aod = mean(aod, na.rm = TRUE),
+    #         .groups = "drop_last"
+    #       ) |>
+    #       dplyr::ungroup()
+    #   },
+    #   pattern = map(chr_aod_date_chunks),
+    #   iteration = "list"
+    # ),
     ### F08A. Aerosol Optical Depth (annual) ####
     targets::tar_target(
       name = int_aod_year_chunks,
@@ -758,7 +758,7 @@ list_process_feature <-
       },
       iteration = "list"
     ),
-    geotargets::tar_terra_rast(
+    targets::tar_target(
       name = rast_year_aod,
       command = {
         year_i <- int_aod_year_chunks
@@ -790,7 +790,23 @@ list_process_feature <-
           fun = function(x) median(x, na.rm = TRUE),
           cores = 4L
         )
-        aod_yr
+
+        aod_yr_dir <- file.path(
+          chr_dir_data,
+          "aerosol"
+        )
+        aod_yr_file <-
+          file.path(aod_yr_dir, paste0("aod_yearly_", year_i, ".tif"))
+
+        if (!dir.exists(aod_yr_dir)) {
+          dir.create(aod_yr_dir, recursive = TRUE)
+        }
+        terra::writeRaster(
+          aod_yr,
+          filename = aod_yr_file,
+          overwrite = TRUE
+        )
+        aod_yr_file
       },
       pattern = map(int_aod_year_chunks),
       iteration = "list"
