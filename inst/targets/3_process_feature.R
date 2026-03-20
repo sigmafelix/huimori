@@ -556,6 +556,7 @@ list_process_feature <-
           x = landuse_ras,
           y = sf_monitors_correct,
           radius = int_landuse_radius,
+          id = c("TMSID", "TMSID2"),
           func = "frac",
           force_df = TRUE
         )
@@ -687,12 +688,12 @@ list_process_feature <-
     targets::tar_target(
       name = df_feat_correct_emittors,
       command = {
-        result <- gw_emittors(
+        result <- huimori::gw_emittors(
           input = sf_monitors_correct,
           target = sf_emission_locs,
           clip = sf_korea_watershed,
           wfun = "gaussian",
-          bw = 5000,
+          bw = 2000,
           dist_method = "geodesic"
         )
         result
@@ -847,16 +848,18 @@ list_process_feature <-
     targets::tar_target(
       name = df_feat_correct_year_aod,
       command = {
+        aod_ras <- terra::rast(rast_year_aod)
+        crs_ras <- terra::crs(aod_ras)
         year_i <- int_aod_year_chunks
         # read
         sf_monitors_correct_buff <-
           sf_monitors_correct |>
           dplyr::filter(year == year_i) |>
-          sf::st_transform(terra::crs(template)) |>
+          sf::st_transform(crs_ras) |>
           sf::st_buffer(dist = 0.001, nQuadSegs = 90L)
 
         extracted <- exactextractr::exact_extract(
-          x = rast_year_aod,
+          x = aod_ras,
           y = sf_monitors_correct_buff,
           fun = "mean",
           weights = NULL,
@@ -868,7 +871,11 @@ list_process_feature <-
       pattern = map(int_aod_year_chunks, rast_year_aod),
       iteration = "list"
     ),
-    ### F09. Merge features ####
+    ### F09. CHELSA ####
+    
+    ### F10. BLH (ERA5) ####
+
+    ### F11. Merge features ####
     targets::tar_target(
       name = df_feat_correct_merged,
       command = {
