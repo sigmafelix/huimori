@@ -577,18 +577,18 @@ list_process_feature <-
         list(
           df_feat_correct_landuse[[1:4]],
           df_feat_correct_landuse[[5:8]],
-          df_feat_correct_landuse[[9:12]],
-          df_feat_correct_landuse[[13:16]],
-          df_feat_correct_landuse[[17:20]],
-          df_feat_correct_landuse[[21:24]],
-          df_feat_correct_landuse[[25:28]],
-          df_feat_correct_landuse[[29:32]],
-          df_feat_correct_landuse[[33:36]],
-          df_feat_correct_landuse[[37:40]],
-          df_feat_correct_landuse[[41:44]],
-          df_feat_correct_landuse[[45:48]],
-          df_feat_correct_landuse[[49:52]],
-          df_feat_correct_landuse[[53:56]]
+          df_feat_correct_landuse[[9:12]]#,
+          # df_feat_correct_landuse[[13:16]],
+          # df_feat_correct_landuse[[17:20]],
+          # df_feat_correct_landuse[[21:24]],
+          # df_feat_correct_landuse[[25:28]],
+          # df_feat_correct_landuse[[29:32]],
+          # df_feat_correct_landuse[[33:36]],
+          # df_feat_correct_landuse[[37:40]],
+          # df_feat_correct_landuse[[41:44]],
+          # df_feat_correct_landuse[[45:48]],
+          # df_feat_correct_landuse[[49:52]],
+          # df_feat_correct_landuse[[53:56]]
         )
       },
       iteration = "list"

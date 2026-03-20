@@ -21,7 +21,10 @@ list_basefiles <-
       name = chr_landuse_files,
       command = {
         glc_dir <- file.path(chr_dir_data, "landuse", "glc_fcs30d")
-        list.files(glc_dir, pattern = "tif$", full.names = TRUE)
+        yrs <- unlist(int_years_spatial)
+        yrs <- yrs - 1L
+        yrs_pattern <- paste0(yrs, collapse = "|")
+        list.files(glc_dir, pattern = paste0("(", yrs_pattern, ")", "\\.tif$"), full.names = TRUE)
       },
       iteration = "list"
     ),

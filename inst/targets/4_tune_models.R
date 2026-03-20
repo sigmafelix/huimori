@@ -53,10 +53,6 @@ list_fit_models <-
 list_tune_models <-
   list(
     targets::tar_target(
-      name = int_years_spatial,
-      command = seq(2015, 2023, 1)
-    ),
-    targets::tar_target(
       name = workflow_tune_xgb_correct_spatial,
       command = {
         yvar <- as.character(form_fit)[2]
