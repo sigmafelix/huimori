@@ -575,9 +575,9 @@ list_process_feature <-
         # rename columns to indicate radius
         # group 1:4, 5:8, ..., 53:56 for 2010, ... 2023, respectively
         list(
-          df_feat_correct_landuse[[1:4]],
-          df_feat_correct_landuse[[5:8]],
-          df_feat_correct_landuse[[9:12]]#,
+          dplyr::bind_cols(df_feat_correct_landuse[1:4]),
+          dplyr::bind_cols(df_feat_correct_landuse[5:8]),
+          dplyr::bind_cols(df_feat_correct_landuse[9:12])#,
           # df_feat_correct_landuse[[13:16]],
           # df_feat_correct_landuse[[17:20]],
           # df_feat_correct_landuse[[21:24]],
@@ -789,19 +789,20 @@ list_process_feature <-
         yrs_vec <- seq(yrs[1], yrs[2], by = 1)
         yrs_vec
       },
-      iteration = "list"
+      iteration = "vector"
     ),
     targets::tar_target(
       name = rast_year_aod,
       command = {
         year_i <- int_aod_year_chunks
-        aod_files <- grep(
-          paste0("MCD19A2_Daily_Composite_", year_i, "[0-9]{3,3}.tif$"),
-          chr_dir_aod,
-          value = TRUE
+        chr_year_aod_files <- list.files(
+          pattern = paste0("MCD19A2_Daily_Composite_", year_i, "[0-9]{3,3}.tif$"),
+          path = chr_dir_aod,
+          full.names = TRUE,
+          recursive = TRUE
         )
 
-        r_list <- lapply(aod_files, terra::rast)
+        r_list <- lapply(chr_year_aod_files, terra::rast)
 
         template <- r_list[[1]]
 
@@ -820,8 +821,7 @@ list_process_feature <-
 
         aod_yr <- terra::app(
           aod_ras,
-          fun = function(x) median(x, na.rm = TRUE),
-          cores = 4L
+          fun = function(x) median(x, na.rm = TRUE)
         )
 
         aod_yr_dir <- file.path(
@@ -842,7 +842,7 @@ list_process_feature <-
         aod_yr_file
       },
       pattern = map(int_aod_year_chunks),
-      iteration = "list"
+      iteration = "vector"
     ),
     targets::tar_target(
       name = df_feat_correct_year_aod,
