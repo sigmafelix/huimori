@@ -57,7 +57,7 @@ list_tune_models <-
       command = seq(2015, 2023, 1)
     ),
     targets::tar_target(
-      name = workflow_tune_correct_spatial,
+      name = workflow_tune_xgb_correct_spatial,
       command = {
         yvar <- as.character(form_fit)[2]
         data_sub <- df_feat_correct_merged %>%
@@ -82,7 +82,35 @@ list_tune_models <-
       )
     ),
     targets::tar_target(
-      name = workflow_tune_incorrect_spatial,
+      name = workflow_tune_mamba_correct_spatial,
+      command = {
+        data_sub <- df_feat_correct_merged %>%
+          dplyr::filter(year == int_years_spatial) %>%
+          .[!is.na(.[[yvar]]), ] %>% # Filter out NA values for the outcome variable
+          dplyr::mutate(site_type = droplevels(site_type))
+
+        data_sub
+        # formula-like interface:
+        # tidied data into tensors to run mamba
+        # res <-
+        #   fit_torch_mamba(
+        #     data = data_sub,
+        #     formula = form_fit,
+        #     invars = chr_terms_x,
+        #     strata = "site_type",
+        #     device = "cpu"
+        #   )
+        # attr(res, "year") <- int_years_spatial
+        # res
+      },
+      pattern = cross(int_years_spatial, form_fit),
+      iteration = "list",
+      resources = targets::tar_resources(
+        crew = targets::tar_resources_crew(controller = "controller_04")
+      )
+    ),
+    targets::tar_target(
+      name = workflow_tune_xgb_incorrect_spatial,
       command = {
         yvar <- as.character(form_fit)[2]
         data_sub <- df_feat_incorrect_merged %>%
@@ -98,6 +126,33 @@ list_tune_models <-
       iteration = "list",
       resources = targets::tar_resources(
         crew = targets::tar_resources_crew(controller = "controller_08")
+      )
+    ),
+    targets::tar_target(
+      name = workflow_tune_mamba_incorrect_spatial,
+      command = {
+        data_sub <- df_feat_correct_merged %>%
+          dplyr::filter(year == int_years_spatial) %>%
+          .[!is.na(.[[yvar]]), ] %>% # Filter out NA values for the outcome variable
+          dplyr::mutate(site_type = droplevels(site_type))
+        data_sub
+        # formula-like interface:
+        # tidied data into tensors to run mamba
+        # res <-
+        #   fit_torch_mamba(
+        #     data = data_sub,
+        #     formula = form_fit,
+        #     invars = chr_terms_x,
+        #     strata = "site_type",
+        #     device = "cpu"
+        #   )
+        # attr(res, "year") <- int_years_spatial
+        # res
+      },
+      pattern = cross(int_years_spatial, form_fit),
+      iteration = "list",
+      resources = targets::tar_resources(
+        crew = targets::tar_resources_crew(controller = "controller_04")
       )
     ),
     # targets::tar_target(
@@ -125,7 +180,7 @@ list_tune_models <-
     #   iteration = "list"
     # ),
     targets::tar_target(
-      name = workflow_fit_correct,
+      name = workflow_fit_xgb_correct,
       command = {
         yvar <- tune::outcome_names(workflow_tune_correct_spatial)
 

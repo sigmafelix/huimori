@@ -18,7 +18,7 @@ list_basefiles <-
     ),
     ## B03. Landuse data ####
     targets::tar_target(
-      name = chr_landuse_file,
+      name = chr_landuse_files,
       command = {
         glc_dir <- file.path(chr_dir_data, "landuse", "glc_fcs30d")
         list.files(glc_dir, pattern = "tif$", full.names = TRUE)
@@ -99,32 +99,23 @@ list_basefiles <-
       command = {
         # 1km mask
         year <- stringi::stri_extract_first_regex(
-          chr_landuse_file, pattern = "20[0-2][0-9]"
+          chr_landuse_files, pattern = "20[0-2][0-9]"
         )
         year <- as.integer(year)
         year_file_name <- sprintf("glc_freq_%d.tif", year)
         file.path(chr_dir_data, "landuse", year_file_name)
       },
       iteration = "list",
-      pattern = map(chr_landuse_file),
+      pattern = map(chr_landuse_files),
       resources = targets::tar_resources(
         crew = targets::tar_resources_crew(controller = "controller_01")
-      )
+      ),
+      cue = tar_cue(mode = "never")
     ),
     ## B11. Emission locations ####
     targets::tar_target(
       name = chr_file_emission_locs,
       command = file.path(chr_dir_data, "emission", "data", "emission_location.gpkg")
-    ),
-    targets::tar_target(
-      name = chr_landuse_files,
-      command = {
-        list.files(
-          file.path(chr_dir_data, "landuse", "glc_fcs30d"),
-          pattern = ".tif$",
-          full.names = TRUE
-        )
-      }
     ),
     targets::tar_target(
       name = chr_dir_aod,

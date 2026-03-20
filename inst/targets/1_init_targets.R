@@ -20,8 +20,8 @@ list_configs <-
           file.path(Sys.getenv("HOME"), "GitHub", "histmap-ko")
         } else if (Sys.getenv("USER") == "songlab") {
           file.path("/members", "songlab", "GitHub", "histmap-ko")
-        } else {
-          file.path(Sys.getenv("HOME"), "Documents", "GitHub", "histmap-ko")
+        } else if (Sys.getenv("USER") == "felix") {
+          file.path(Sys.getenv("HOME"), "GitHub", "histmap-ko")
         }
       }
     ),

@@ -520,6 +520,11 @@ list_process_feature <-
     ),
     ### F04. Land use fractions ####
     targets::tar_target(
+      name = int_landuse_radius,
+      command = c(30, 100, 500, 2000),
+      iteration = "list"
+    ),
+    targets::tar_target(
       name = df_feat_correct_landuse,
       command = {
         # landuse_ras <-
@@ -538,27 +543,55 @@ list_process_feature <-
         #       0, 0, 1, 1, 1, 0, 0),
         #     nrow = 7, ncol = 7, byrow = TRUE
         #   )
+        # should be set as chr_landuse_freq_file when preprocessed files are used
         landuse_ras <-
-          terra::rast(chr_landuse_freq_file)
+          terra::rast(chr_landuse_files)
 
         # landuse_freq <-
         #   huimori::rasterize_freq(
         #     ras = landuse_ras,
         #     mat = flt7
         #   )
-        chopin::extract_at(
+        df_extract <- chopin::extract_at(
           x = landuse_ras,
           y = sf_monitors_correct,
-          radius = 100,
+          radius = int_landuse_radius,
           func = "frac",
           force_df = TRUE
         )
+        df_extract |>
+          dplyr::rename_with(~ paste0("landuse_frac_", ., "_", int_landuse_radius))
       },
-      pattern = map(chr_landuse_freq_file),
+      pattern = cross(chr_landuse_files, int_landuse_radius),
       iteration = "list",
       resources = targets::tar_resources(
-        crew = targets::tar_resources_crew(controller = "controller_20")
+        crew = targets::tar_resources_crew(controller = "controller_04")
       )
+    ),
+    # results from the same radius as one, such that chr_landuse_files are the only branching factor
+    targets::tar_target(
+      name = df_feat_correct_landuse_agg,
+      command = {
+        # rename columns to indicate radius
+        # group 1:4, 5:8, ..., 53:56 for 2010, ... 2023, respectively
+        list(
+          df_feat_correct_landuse[[1:4]],
+          df_feat_correct_landuse[[5:8]],
+          df_feat_correct_landuse[[9:12]],
+          df_feat_correct_landuse[[13:16]],
+          df_feat_correct_landuse[[17:20]],
+          df_feat_correct_landuse[[21:24]],
+          df_feat_correct_landuse[[25:28]],
+          df_feat_correct_landuse[[29:32]],
+          df_feat_correct_landuse[[33:36]],
+          df_feat_correct_landuse[[37:40]],
+          df_feat_correct_landuse[[41:44]],
+          df_feat_correct_landuse[[45:48]],
+          df_feat_correct_landuse[[49:52]],
+          df_feat_correct_landuse[[53:56]]
+        )
+      },
+      iteration = "list"
     ),
     ### F05. MTPI (multiscale terrain position index) ####
     targets::tar_target(
@@ -1170,7 +1203,7 @@ list_process_feature <-
         # )
       },
       iteration = "list",
-      pattern = cross(list_pred_calc_grid, chr_landuse_freq_file),
+      pattern = cross(list_pred_calc_grid, chr_landuse_files),
       resources = targets::tar_resources(
         crew = targets::tar_resources_crew(controller = "controller_20")
       )
