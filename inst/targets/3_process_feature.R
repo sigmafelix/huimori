@@ -145,6 +145,16 @@ list_process_site <-
 
       }
     ),
+    # sf_monitors_correct branched by year (subset by year)
+    targets::tar_target(
+      name = sf_monitors_correct_yr,
+      command = {
+        sf_monitors_correct |>
+          dplyr::filter(year == int_years_spatial)
+      },
+      pattern = map(int_years_spatial),
+      iteration = "list"
+    ),
     # full spacetime data frame for unique TMSID-date combinations
     targets::tar_target(
       name = sf_monitors_correct_full,
@@ -360,7 +370,8 @@ list_process_site <-
     )
   )
 
-# Is it really necessary?
+
+## Grid processing for prediction ####
 list_process_split <-
   list(
     targets::tar_target(
@@ -465,7 +476,7 @@ list_process_split <-
   )
 
 
-
+## Annualized feature calculation ####
 list_process_feature <-
   list(
     ### F01. Distance to the nearest road ####
@@ -473,50 +484,62 @@ list_process_feature <-
       name = df_feat_correct_d_road,
       command = {
         road <- sf::st_read(chr_road_files[length(chr_road_files)], quiet = TRUE)
-        road <- sf::st_transform(road, sf::st_crs(sf_monitors_correct))
+        road <- sf::st_transform(road, sf::st_crs(sf_monitors_correct_yr))
         road <- road %>%
           dplyr::filter(!ROAD_TYPE %in% c("002", "004") & ROAD_USE == 0)
         nearest_idx <- sf::st_nearest_feature(
-          x = sf_monitors_correct,
+          x = sf_monitors_correct_yr,
           y = road
         )
         road_nearest <- road[nearest_idx, ]
         dist_road_nearest <-
           sf::st_distance(
-            x = sf_monitors_correct,
+            x = sf_monitors_correct_yr,
             y = road_nearest,
             by_element = TRUE
           )
         sf_monitors_dist_att <-
-          sf_monitors_correct |>
+          sf_monitors_correct_yr |>
           dplyr::select(
             TMSID, TMSID2, year
           ) |>
           dplyr::mutate(
             d_road = dist_road_nearest
-          )
+          ) |>
+          sf::st_drop_geometry()
         sf_monitors_dist_att
-      }
+      },
+      pattern = map(sf_monitors_correct_yr)
     ),
     ### F02. DSM (surface elevation) ####
     targets::tar_target(
       name = df_feat_correct_dsm,
-      command = chopin::extract_at(
-        x = chr_dsm_file,
-        y = sf_monitors_correct,
-        radius = 1e-6,
-        force_df = TRUE
-      )
+      command = {
+        chopin::extract_at(
+          x = chr_dsm_file,
+          y = sf_monitors_correct_yr,
+          radius = 1e-6,
+          id = c("TMSID", "TMSID2", "year"),
+          force_df = TRUE
+        ) |>
+          dplyr::rename(dsm = mean)
+      },
+      pattern = map(sf_monitors_correct_yr)
     ),
     ### F03. DEM (ground elevation) ####
     targets::tar_target(
       name = df_feat_correct_dem,
-      command = chopin::extract_at(
-        x = chr_dem_file,
-        y = sf_monitors_correct,
-        radius = 1e-6,
-        force_df = TRUE
-      )
+      command = {
+        chopin::extract_at(
+          x = chr_dem_file,
+          y = sf_monitors_correct_yr,
+          radius = 1e-6,
+          id = c("TMSID", "TMSID2", "year"),
+          force_df = TRUE
+        ) |>
+          dplyr::rename(dem = mean)
+      },
+      pattern = map(sf_monitors_correct_yr)
     ),
     ### F04. Land use fractions ####
     targets::tar_target(
@@ -554,16 +577,19 @@ list_process_feature <-
         #   )
         df_extract <- chopin::extract_at(
           x = landuse_ras,
-          y = sf_monitors_correct,
+          y = sf_monitors_correct_yr,
           radius = int_landuse_radius,
-          id = c("TMSID", "TMSID2"),
+          id = c("TMSID", "TMSID2", "year"),
           func = "frac",
           force_df = TRUE
         )
         df_extract |>
-          dplyr::rename_with(~ paste0("landuse_frac_", ., "_", int_landuse_radius))
+          dplyr::rename_with(
+            .cols = dplyr::contains("frac"),
+            .fn = ~ paste0("landuse_", ., "_", int_landuse_radius)
+          )
       },
-      pattern = cross(chr_landuse_files, int_landuse_radius),
+      pattern = cross(map(sf_monitors_correct_yr, chr_landuse_files), int_landuse_radius),
       iteration = "list",
       resources = targets::tar_resources(
         crew = targets::tar_resources_crew(controller = "controller_04")
@@ -576,20 +602,15 @@ list_process_feature <-
         # rename columns to indicate radius
         # group 1:4, 5:8, ..., 53:56 for 2010, ... 2023, respectively
         list(
-          dplyr::bind_cols(df_feat_correct_landuse[1:4]),
-          dplyr::bind_cols(df_feat_correct_landuse[5:8]),
-          dplyr::bind_cols(df_feat_correct_landuse[9:12])#,
-          # df_feat_correct_landuse[[13:16]],
-          # df_feat_correct_landuse[[17:20]],
-          # df_feat_correct_landuse[[21:24]],
-          # df_feat_correct_landuse[[25:28]],
-          # df_feat_correct_landuse[[29:32]],
-          # df_feat_correct_landuse[[33:36]],
-          # df_feat_correct_landuse[[37:40]],
-          # df_feat_correct_landuse[[41:44]],
-          # df_feat_correct_landuse[[45:48]],
-          # df_feat_correct_landuse[[49:52]],
-          # df_feat_correct_landuse[[53:56]]
+          Reduce(\(x, y) collapse::join(x, y, on = c("TMSID", "TMSID2", "year")), df_feat_correct_landuse[1:4]),
+          Reduce(\(x, y) collapse::join(x, y, on = c("TMSID", "TMSID2", "year")), df_feat_correct_landuse[5:8]),
+          Reduce(\(x, y) collapse::join(x, y, on = c("TMSID", "TMSID2", "year")), df_feat_correct_landuse[9:12]),
+          Reduce(\(x, y) collapse::join(x, y, on = c("TMSID", "TMSID2", "year")), df_feat_correct_landuse[13:16]),
+          Reduce(\(x, y) collapse::join(x, y, on = c("TMSID", "TMSID2", "year")), df_feat_correct_landuse[17:20]),
+          Reduce(\(x, y) collapse::join(x, y, on = c("TMSID", "TMSID2", "year")), df_feat_correct_landuse[21:24]),
+          Reduce(\(x, y) collapse::join(x, y, on = c("TMSID", "TMSID2", "year")), df_feat_correct_landuse[25:28]),
+          Reduce(\(x, y) collapse::join(x, y, on = c("TMSID", "TMSID2", "year")), df_feat_correct_landuse[29:32]),
+          Reduce(\(x, y) collapse::join(x, y, on = c("TMSID", "TMSID2", "year")), df_feat_correct_landuse[33:36])
         )
       },
       iteration = "list"
@@ -601,11 +622,14 @@ list_process_feature <-
         mtpi_ras <- terra::rast(chr_mtpi_file)
         chopin::extract_at(
           x = mtpi_ras,
-          y = sf_monitors_correct,
+          y = sf_monitors_correct_yr,
           radius = 1e-6,
+          id = c("TMSID", "TMSID2", "year"),
           force_df = TRUE
-        )
-      }
+        ) |>
+          dplyr::rename(mtpi = mean)
+      },
+      pattern = map(sf_monitors_correct_yr)
     ),
     ### F06. MTPI at 1km buffer ####
     targets::tar_target(
@@ -614,11 +638,14 @@ list_process_feature <-
         mtpi_ras <- terra::rast(chr_mtpi_1km_file)
         chopin::extract_at(
           x = mtpi_ras,
-          y = sf_monitors_correct,
+          y = sf_monitors_correct_yr,
           radius = 1e-6,
+          id = c("TMSID", "TMSID2", "year"),
           force_df = TRUE
-        )
-      }
+        ) |>
+          dplyr::rename(mtpi_1km = mean)
+      },
+      pattern = map(sf_monitors_correct_yr)
     ),
     ### F07. Emittors ####
     targets::tar_target(
@@ -690,15 +717,17 @@ list_process_feature <-
       name = df_feat_correct_emittors,
       command = {
         result <- huimori::gw_emittors(
-          input = sf_monitors_correct,
+          input = sf_monitors_correct_yr,
           target = sf_emission_locs,
           clip = sf_korea_watershed,
           wfun = "gaussian",
           bw = 2000,
           dist_method = "geodesic"
-        )
+        ) |>
+          dplyr::select(1, 2, year, 3, PM10, PM25, gw_emission)
         result
-      }
+      },
+      pattern = map(sf_monitors_correct_yr)
     ),
     ### F08. Aerosol Optical Depth (daily) ####
     targets::tar_target(
@@ -854,8 +883,7 @@ list_process_feature <-
         year_i <- int_aod_year_chunks
         # read
         sf_monitors_correct_buff <-
-          sf_monitors_correct |>
-          dplyr::filter(year == year_i) |>
+          sf_monitors_correct_yr |>
           sf::st_transform(crs_ras) |>
           sf::st_buffer(dist = 0.001, nQuadSegs = 90L)
 
@@ -866,10 +894,16 @@ list_process_feature <-
           weights = NULL,
           force_df = TRUE,
           append_cols = c("TMSID", "TMSID2", "year")
-        )
+        ) |>
+          dplyr::transmute(
+            TMSID = TMSID,
+            TMSID2 = TMSID2,
+            year = year,
+            aod = ifelse(is.nan(mean), 0L, mean)
+          )
         extracted
       },
-      pattern = map(int_aod_year_chunks, rast_year_aod),
+      pattern = map(sf_monitors_correct_yr, int_aod_year_chunks, rast_year_aod),
       iteration = "list"
     ),
     ### F09. CHELSA ####
@@ -882,9 +916,62 @@ list_process_feature <-
       command = {
         df_res <-
           purrr::reduce(
+            list(
+              sf_monitors_correct_yr,
+              df_feat_correct_d_road,
+              df_feat_correct_dem,
+              df_feat_correct_dsm,
+              df_feat_correct_emittors,
+              df_feat_correct_landuse_agg,
+              df_feat_correct_mtpi,
+              df_feat_correct_mtpi_1km,
+              df_feat_correct_year_aod
+            ),
+            .f = collapse::join,
+            on = c("TMSID", "TMSID2", "year")
+          ) %>%
+          # dplyr::left_join(
+          #   df_feat_correct_wind_annual,
+          #   by = c("TMSID", "TMSID2", "year")
+          # ) %>%
+          dplyr::mutate(
+            d_road = as.numeric(d_road) / 1000,
+            dsm = as.numeric(dsm),
+            dem = as.numeric(dem),
+            mtpi = as.numeric(mtpi)#,
+            # building_density = as.numeric(building_density),
+            # wind_speed_10m = as.numeric(wind_speed_10m),
+            # wind_dir_deg = as.numeric(wind_dir_deg),
+            # n_emittors_watershed =
+            #   ifelse(
+            #     is.na(n_emittors_watershed), 0,
+            #     as.numeric(n_emittors_watershed)
+            #   )
+          ) %>%
+          sf::st_drop_geometry()
+        names(df_res) <- sub("mean.", "", names(df_res))
+        df_res
+      },
+      pattern = map(
+        sf_monitors_correct_yr,
+        df_feat_correct_d_road,
+        df_feat_correct_dem,
+        df_feat_correct_dsm,
+        df_feat_correct_emittors,
+        df_feat_correct_landuse_agg,
+        df_feat_correct_mtpi,
+        df_feat_correct_mtpi_1km,
+        df_feat_correct_year_aod
+      )
+    ),
+    targets::tar_target(
+      name = df_feat_correct_merged_old,
+      command = {
+        df_res <-
+          purrr::reduce(
             .x =
             list(
-              sf_monitors_correct,
+              sf_monitors_correct_yr,
               df_feat_correct_d_road
             ),
             .f = collapse::join,
