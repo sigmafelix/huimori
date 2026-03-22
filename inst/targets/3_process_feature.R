@@ -683,7 +683,8 @@ list_process_feature <-
             n_emittors_watershed = ifelse(is.na(n_emittors_watershed), 0, n_emittors_watershed)
           )
         watersheds_n_emit
-      }
+      },
+      cue = targets::tar_cue("never")
     ),
     targets::tar_target(
       name = df_feat_correct_emittors,
@@ -897,7 +898,13 @@ list_process_feature <-
           #   by = c("TMSID", "TMSID2", "year")
           # ) %>%
           dplyr::left_join(
-            df_feat_correct_year_aod,
+            {
+              purrr::reduce(
+              .x = df_feat_correct_year_aod,
+              .f = rbind
+              ) %>%
+              dplyr::rename(aod = mean)
+            },
             by = c("TMSID", "TMSID2", "year")
           ) %>%
           # dplyr::left_join(
@@ -915,15 +922,15 @@ list_process_feature <-
             d_road = as.numeric(d_road) / 1000,
             dsm = as.numeric(dsm),
             dem = as.numeric(dem),
-            mtpi = as.numeric(mtpi),
-            building_density = as.numeric(building_density),
-            wind_speed_10m = as.numeric(wind_speed_10m),
-            wind_dir_deg = as.numeric(wind_dir_deg),
-            n_emittors_watershed =
-              ifelse(
-                is.na(n_emittors_watershed), 0,
-                as.numeric(n_emittors_watershed)
-              )
+            mtpi = as.numeric(mtpi)#,
+            # building_density = as.numeric(building_density),
+            # wind_speed_10m = as.numeric(wind_speed_10m),
+            # wind_dir_deg = as.numeric(wind_dir_deg),
+            # n_emittors_watershed =
+            #   ifelse(
+            #     is.na(n_emittors_watershed), 0,
+            #     as.numeric(n_emittors_watershed)
+            #   )
           ) %>%
           sf::st_drop_geometry()
         names(df_res) <- sub("mean.", "", names(df_res))
