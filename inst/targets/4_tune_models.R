@@ -65,12 +65,21 @@ list_tune_models <-
           dplyr::filter(year == int_years_spatial) %>%
           .[!is.na(.[[yvar]]), ] %>% # Filter out NA values for the outcome variable
           dplyr::mutate(site_type = droplevels(site_type))
+        data_sub <-
+          data_sub |>
+          dplyr::mutate(
+            latitude = as.double(stringi::stri_extract_first_regex(coords_google, pattern = "[3-4][0-9]\\.[0-9]{2,8}")),
+            longitude = as.double(stringi::stri_extract_last_regex(coords_google, pattern = "1[2-4][0-9]\\.[0-9]{2,8}"))
+          ) |>
+          sf::st_as_sf(coords = c("longitude", "latitude"), crs = 4326) |>
+          sf::st_transform(crs = "EPSG:5179")
+
         res <-
           fit_tidy_xgb(
             data = data_sub,
             formula = form_fit,
             invars = chr_terms_x,
-            strata = "site_type",
+            strata = "spatial",
             device = "cpu"
           )
         attr(res, "year") <- int_years_spatial
