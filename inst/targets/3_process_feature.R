@@ -3,7 +3,17 @@ list_process_site <-
   list(
     targets::tar_target(
       name = dt_measurements,
-      command = nanoparquet::read_parquet(chr_measurement_file)
+      command = {
+        dt <- data.table::as.data.table(nanoparquet::read_parquet(chr_measurement_file))
+        # 시간 밀림 보정 (9시간 가산)
+        dt[, datehour := datehour + lubridate::hours(9)]
+        dt[, date := data.table::as.IDate(date + lubridate::hours(9))]
+        # 음수값(-999)은 일괄적으로 결측치(NA) 처리
+        cols_to_fix <- c("SO2", "CO", "O3", "NO2", "PM10", "PM25")
+        dt[, (cols_to_fix) := lapply(.SD, function(x) ifelse(x < 0, NA, x)), 
+           .SDcols = cols_to_fix]
+        dt
+      }
     ),
     targets::tar_target(
       name = sf_monitors_base,
@@ -1001,12 +1011,13 @@ list_process_feature <-
           dplyr::mutate(
             dsm = unlist(df_feat_correct_dsm),
             dem = unlist(df_feat_correct_dem),
-            n_emittors_watershed = unlist(df_feat_correct_emittors$n_emittors_watershed),
+            # n_emittors_watershed = unlist(df_feat_correct_emittors$n_emittors_watershed),
             mtpi = unlist(df_feat_correct_mtpi),
             mtpi_1km = unlist(df_feat_correct_mtpi_1km)
           ) %>%
+          # 4. 단위 변환 및 데이터 타입 정제
           dplyr::mutate(
-            d_road = as.numeric(d_road) / 1000,
+            d_road = as.numeric(d_road) / 1000,           # m 단위를 km로 변환
             dsm = as.numeric(dsm),
             dem = as.numeric(dem),
             mtpi = as.numeric(mtpi)#,
@@ -1179,39 +1190,42 @@ list_process_feature <-
       }
     ),
     # Grid point features
-    targets::tar_target(
-      name = df_feat_grid_d_road,
-      command = {
-        road <- sf::st_read(chr_road_files[length(chr_road_files)], quiet = TRUE)
-        road <- sf::st_transform(road, sf::st_crs(list_pred_calc_grid))
-        road <- road %>%
-          dplyr::filter(!ROAD_TYPE %in% c("002", "004") & ROAD_USE == 0)
-        nearest_idx <- sf::st_nearest_feature(
-          x = list_pred_calc_grid,
-          y = road
-        )
-        road_nearest <- road[nearest_idx, ]
-        dist_road_nearest <-
-          sf::st_distance(
-            x = list_pred_calc_grid,
-            y = road_nearest,
-            by_element = TRUE
-          )
-        sf_grid_dist_att <-
-          list_pred_calc_grid |>
-          dplyr::mutate(
-            d_road = dist_road_nearest
-          ) |>
-          sf::st_drop_geometry()
-        sf_grid_dist_att
-
-      },
-      iteration = "list",
-      pattern = map(list_pred_calc_grid),
-      resources = targets::tar_resources(
-        crew = targets::tar_resources_crew(controller = "controller_20")
-      )
-    ),
+   targets::tar_target(
+     name = df_feat_grid_d_road,
+     command = {
+       road <- sf::st_read(chr_road_files, quiet = TRUE)
+       road <- sf::st_transform(road, sf::st_crs(list_pred_calc_grid))
+       road <- road %>%
+         dplyr::filter(!ROAD_TYPE %in% c("002", "004") & ROAD_USE == 0)
+       nearest_idx <- sf::st_nearest_feature(
+         x = list_pred_calc_grid,
+         y = road
+       )
+       road_nearest <- road[nearest_idx, ]
+       dist_road_nearest <-
+         sf::st_distance(
+           x = list_pred_calc_grid,
+           y = road_nearest,
+           by_element = TRUE
+         )
+       
+       sf_grid_dist_att <-
+         list_pred_calc_grid |>
+         dplyr::mutate(
+           d_road = dist_road_nearest
+         ) |>
+         sf::st_drop_geometry()
+       
+       sf_grid_dist_att
+     },
+     iteration = "list",
+     
+     # Cross mapping
+     pattern = cross(list_pred_calc_grid, chr_road_files),
+     resources = targets::tar_resources(
+       crew = targets::tar_resources_crew(controller = "controller_20")
+     )
+   ),
     targets::tar_target(
       name = df_feat_grid_dsm,
       command = {
@@ -1363,49 +1377,52 @@ list_process_feature <-
         crew = targets::tar_resources_crew(controller = "controller_08")
       )
     ),
-    targets::tar_target(
-      name = df_feat_grid_merged,
-      command = {
-       df_res <-
-          purrr::reduce(
-            .x =
-              list(
-                list_pred_calc_grid,
-                df_feat_grid_d_road
-              ),
-            .f = collapse::join,
-            on = c("gid")
-          ) %>%
-          dplyr::bind_cols(
-            df_feat_grid_landuse
-          ) %>%
-          dplyr::mutate(
-            dsm = unlist(df_feat_grid_dsm),
-            dem = unlist(df_feat_grid_dem),
-            n_emittors_watershed = unlist(df_feat_grid_emittors$n_emittors_watershed),
-            mtpi = unlist(df_feat_grid_mtpi)
-          ) %>%
-          dplyr::mutate(
-            d_road = as.numeric(d_road) / 1000,
-            dsm = as.numeric(dsm),
-            dem = as.numeric(dem),
-            mtpi = as.numeric(mtpi),
-            n_emittors_watershed = as.numeric(n_emittors_watershed)
-          ) %>%
-          sf::st_drop_geometry()
-        names(df_res) <- sub("mean.", "", names(df_res))
-        df_res
-      },
-      iteration = "list",
-      pattern =
-      map(
-        list_pred_calc_grid,
-        df_feat_grid_d_road,
-        df_feat_grid_dsm,
-        df_feat_grid_dem,
-        df_feat_grid_landuse,
-        df_feat_grid_mtpi,
-        df_feat_grid_emittors
-      )
-  )
+   targets::tar_target(
+     name = df_feat_grid_merged,
+     command = {
+       df_res <- df_feat_grid_d_road %>%
+         dplyr::bind_cols(df_feat_grid_landuse)
+       df_res %>%
+         dplyr::mutate(
+           dsm = as.numeric(df_feat_grid_dsm), 
+           dem = as.numeric(df_feat_grid_dem),
+           mtpi = as.numeric(df_feat_grid_mtpi),
+           n_emittors_watershed = as.numeric(df_feat_grid_emittors$n_emittors_watershed),
+           d_road = as.numeric(d_road) / 1000
+         )
+     },
+     iteration = "list",
+     pattern = map(
+       df_feat_grid_d_road,
+       df_feat_grid_landuse
+     )
+   )
 )
+
+
+
+# ----------------------------------------------------------------
+# 변경 log 기록(dhnyu)
+## 2026.01.31
+
+### DAG 상에서 최종 객체와 직접적으로 이어지지 않는 target 체크
+#### dt_asos, ras_landuse_freq
+#### int_size_split, sf_grid_correct_split, int_split_grid_ids, list_pred_calc_grid_old
+#### df_feat_incorrect_emittors, df_feat_grid_mtpi_1km
+
+### df_feat_grid_d_road 수정: 연도별 값 반영하여 시공간변수화
+### df_feat_grid_merged 수정: 일반 공간변수(593)와 시공간변수(8302, road/landuse)를 같은 길이로 매핑하도록 수정.
+
+
+## 2026.02.05
+### df_feat_correct_landuse 수정:
+#### (1) landuse_ras <- terra::rast(chr_landuse_freq_file)는 실수형이 아니라 비율형이기 때문에 `chopin::extract_at(func="frac")`을 `chopin::extract_at(func="mean")`로 수정.
+#### (2) 현재 토지피복 연도가 측정소 연도보다 1년 전인 행만 유지하기.
+
+## 2026.02.06
+### dt_measurements 수정:
+#### (1) 시간 밀림 보정 (time zone 정보가 없어서 시간별 미세먼지 데이터의 시간이 9시간씩 밀려있었음.)
+#### (2) 대기질 농도에서 음수값(-999로 기록됨)은 결측치 처리
+
+### df_feat_correct_merged 수정: landuse 변경사항에 맞게 수정
+

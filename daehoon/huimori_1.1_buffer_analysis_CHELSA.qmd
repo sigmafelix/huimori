@@ -1,0 +1,1433 @@
+---
+title: "huimori_1.1_buffer_analysis"
+format:
+  html:
+    theme: cosmo
+    toc: true
+    toc-depth: 3
+    toc-location: left
+    code-fold: show
+    code-summary: "코드 보기"
+    code-overflow: wrap
+    number-sections: true
+    smooth-scroll: true
+    embed-resources: true
+    df-print: paged
+    page-layout: full
+editor: visual
+---
+
+```{r}
+library(tidyverse)
+library(sf)
+library(data.table)
+library(terra)
+library(ncdf4)
+library(httr)
+library(exactextractr)
+library(huimori)
+library(readxl)
+library(arrow)
+library(stringi)
+library(plyr)
+library(chopin)
+library(geosphere)
+library(tidymodels)
+library(spatialsample)
+library(finetune)
+```
+
+# 경로 정리
+
+```{r}
+# 작업위치 경로
+chr_dir_huimori <- file.path(Sys.getenv("HOME"), "huimori")
+setwd(chr_dir_huimori)
+
+# 절대경로
+chr_dir_data <- "/mnt/hdd001/Korea"
+chr_dir_git <- file.path(Sys.getenv("HOME"), "histmap-ko")
+
+## 미세먼지 측정소 위치
+chr_monitors_file <- file.path(chr_dir_git, "data/sites", "sites_history_cleaning_20250311.xlsx")
+
+# 미세먼지 측정 값
+chr_measurement_dir <- file.path(chr_dir_data, "airquality", "outdoor")
+chr_measurement_file <- file.path(chr_measurement_dir, "sites_airkorea_2010_2023_spt_yd.parquet")
+
+# 토지피복
+chr_landuse_file <- list.files(file.path(chr_dir_data, "landuse", "glc_fcs30d"), pattern = "tif$", full.names = TRUE)
+
+# 고도
+chr_dem_file <- file.path(chr_dir_data, "elevation", "kngii_2022_merged_res30d.tif")
+chr_dsm_file <- file.path(chr_dir_data, "elevation", "copernicus_korea_30m.tif")
+
+# 도로
+chr_road_files <- list.files(file.path(chr_dir_data, "transportation", "nodelink", "data"), pattern = "MOCT_LINK.shp$", recursive = TRUE, full.names = TRUE)
+
+# 황사
+chr_asos_file <- file.path(chr_dir_data, "weather", "data", "asos_2010_2023.parquet")
+chr_asos_site_file <- file.path(chr_dir_data, "weather", "data", "asos_sites.xlsx")
+
+# 유역
+chr_korea_watershed <- file.path(chr_dir_data, "watersheds", "data", "watershed-korea.gpkg")
+
+# 지형(multi-scale topographic position index)
+chr_mtpi_file <- file.path(chr_dir_data, "elevation", "kngii_90m_mtpi.tif")
+chr_mtpi_1km_file <- terra::rast(chr_mtpi_file) |> 
+  terra::aggregate(fact = 11, fun = "mean", na.rm = TRUE) |> 
+  terra::writeRaster(file.path(chr_dir_data, "elevation", "kngii_1km_mtpi.tif"), overwrite = TRUE) |> 
+  terra::sources()
+
+# 토지피복 빈도
+chr_landuse_freq_file <- file.path(chr_dir_data, "landuse", sprintf("glc_freq_%d.tif", as.integer(stringi::stri_extract_first_regex(chr_landuse_file, "20[0-2][0-9]"))))
+
+# 토지피복
+chr_landuse_files <- list.files(
+  file.path(chr_dir_data, "landuse", "glc_fcs30d"),
+  pattern = ".tif$",
+  full.names = TRUE
+)
+
+# 점 오염원
+chr_file_emission_locs <- file.path(chr_dir_data, "emission", "data", "emission_location.gpkg")
+
+# 한국지도
+geodata::geodata_path(file.path("~", "geodatacache"))
+sf_korea_all <- geodata::gadm(country = "KOR", level = 0) |>
+  sf::st_as_sf() |>
+  sf::st_transform("EPSG:5179")
+```
+
+# 기존 변수 점검
+
+## 측정소 데이터 생성
+
+의존하는 `dt_measurements`, `sf_monitors_base`, `sf_monitors_correct` 생성
+
+```{r}
+dt_measurements <- nanoparquet::read_parquet(chr_measurement_file)
+
+# 1. 데이터 읽기
+sites <- readxl::read_excel(chr_monitors_file)
+
+# 2. 데이터 클리닝 및 전처리
+sites_c <- sites |>
+  dplyr::filter(!grepl("(광화학|중금속|산성|유해)", site_type)) |>
+  dplyr::arrange(TMSID, site_type, year) |>
+  dplyr::filter(!grepl("\\-[1-9]$", TMSID)) |>
+  dplyr::ungroup() |>
+  # pre-cleaning: detect max year
+  dplyr::group_by(TMSID, site_type) |>
+  dplyr::mutate(year_max = max(year)) |>
+  dplyr::ungroup() |>
+  # distinct rows by selected fields
+  dplyr::distinct(
+    TMSID, date_start, date_end, coords_google, floor,
+    .keep_all = TRUE
+  ) |>
+  dplyr::mutate(
+    date_start = as.POSIXct(date_start, tz = "Asia/Seoul"),
+    date_end = as.POSIXct(date_end, tz = "Asia/Seoul")
+  ) |>
+  dplyr::group_by(TMSID) |>
+  # Assign first and last row
+  dplyr::mutate(
+    date_start = replace(date_start, dplyr::row_number() == 1, unique(fill_date(date_start, min(year), TRUE))),
+    date_end = replace(date_end, dplyr::row_number() == dplyr::n(), unique(fill_date(date_end, max(year_max), start = FALSE)))
+  ) |>
+  # if no location changes were detected and date_start and date_end are NAs,
+  # use the minimum year to assign date_start and the maximum year to assign date_end.
+  dplyr::mutate(
+    date_start = ifelse(dplyr::n() == 1 & is.na(date_start), as.POSIXct(sprintf("%d0101010000", year), format = "%Y%m%d%H%M%S", tz = "Asia/Seoul"), date_start),
+    date_end = ifelse(dplyr::n() == 1 & is.na(date_end), as.POSIXct(sprintf("%d1231230000", year_max), format = "%Y%m%d%H%M%S", tz = "Asia/Seoul"), date_end)
+  ) |>
+  dplyr::filter(!(is.na(date_start) & is.na(date_end))) |>
+  dplyr::mutate(
+    date_end = ifelse(is.na(date_end), dplyr::lead(date_end), date_end)
+  ) |>
+  dplyr::ungroup() |>
+  dplyr::filter(!is.na(date_start)) |>
+  dplyr::mutate(
+    date_start = as.POSIXct(date_start, tz = "Asia/Seoul"),
+    date_end = as.POSIXct(date_end, tz = "Asia/Seoul")
+  )
+
+# 3. Lookup 테이블 정의
+check_lookup <- c("[도시대기측정망]", "[도로변대기측정망]", "[PM2.5성분측정망]", "[교외대기측정망]",
+                  "[항만측정망]", "[국가배경농도(도서)측정망]", "[대기오염집중측정망]")
+target_lookup <- c("Urban", "Roadside", "PM2.5", "Suburban",
+                   "Port", "Island", "Concentrated")
+
+# 4. 최종 결과 생성 (sf_monitors_base)
+sf_monitors_base <- sites_c |>
+  dplyr::select(TMSID, site_type, dplyr::starts_with("date_"), dplyr::starts_with("coords_google")) |>
+  dplyr::distinct() |>
+  dplyr::rowwise() |>
+  dplyr::mutate(
+    lon = as.numeric(stringi::stri_split_fixed(coords_google, pattern = ", ")[[1]][2]),
+    lat = as.numeric(stringi::stri_split_fixed(coords_google, pattern = ", ")[[1]][1])
+  ) |>
+  dplyr::ungroup() |>
+  dplyr::mutate(
+    site_type = sub(" ", "", site_type),
+    site_type = plyr::mapvalues(site_type, check_lookup, target_lookup),
+    site_type = factor(site_type, levels = target_lookup[c(1, 2, 4, 5, 3, 6, 7)])
+  ) |>
+  dplyr::group_by(TMSID) |>
+  dplyr::mutate(TMSID2 = paste0(TMSID, LETTERS[seq_len(length(TMSID))])) |>
+  dplyr::ungroup()
+
+# 1. 연간 요약 데이터 생성
+# dt_measurements가 메모리에 로드되어 있어야 함
+ak_sites_annual <- huimori::summarize_annual(
+  data = dt_measurements,
+  timeflag = "date"
+)
+
+# 2. 측정소 이전 거리(Relocation distance) 계산
+sites_cfd <- sf_monitors_base |>
+  dplyr::arrange(TMSID, date_start) |>
+  dplyr::group_by(TMSID) |>
+  dplyr::mutate(lon2 = lag(lon), lat2 = lag(lat)) |>
+  dplyr::rowwise() |>
+  dplyr::mutate(
+    dist_m = geosphere::distGeo(c(lon, lat), c(lon2, lat2))
+  ) |>
+  dplyr::ungroup()
+
+# 3. 시공간 범위 확장 (연도별 전개)
+sites_fullrange <- sites_cfd |>
+  dplyr::group_by(TMSID, TMSID2) |>
+  dplyr::filter(!is.na(date_start) & !is.na(date_end)) |>
+  tidyr::nest() |>
+  dplyr::mutate(
+    year_all = purrr::map(data, function(df) {
+      ystart <- lubridate::year(df$date_start)
+      yend   <- lubridate::year(df$date_end)
+      data.frame(year = seq(ystart, yend))
+    })
+  ) |>
+  tidyr::unnest(cols = c(year_all, data)) |>
+  dplyr::ungroup()
+
+# 4. 공간 데이터(sf) 변환 및 측정 데이터 결합
+sf_monitors_correct <- sites_fullrange |>
+  dplyr::filter(!is.na(lon)) |>
+  sf::st_as_sf(
+    coords = c("lon", "lat"),
+    crs = 4326
+  ) |>
+  sf::st_transform(5179) |>
+  dplyr::full_join(
+    ak_sites_annual,
+    by = c("TMSID", "TMSID2", "year")
+  ) |>
+  dplyr::filter(!sf::st_is_empty(geometry))
+```
+
+## 변수 생성
+
+```{r}
+## 도로와의 거리 `df_feat_correct_d_road`
+target_road_file <- chr_road_files[length(chr_road_files)]
+road <- sf::st_read(target_road_file, quiet = TRUE) |>
+  sf::st_transform(sf::st_crs(sf_monitors_correct)) |>
+  dplyr::filter(!ROAD_TYPE %in% c("002", "004") & ROAD_USE == 0)
+
+nearest_idx <- sf::st_nearest_feature(
+  x = sf_monitors_correct,
+  y = road
+)
+road_nearest <- road[nearest_idx, ]
+dist_road_nearest <- sf::st_distance(
+  x = sf_monitors_correct,
+  y = road_nearest,
+  by_element = TRUE
+)
+df_feat_correct_d_road <- sf_monitors_correct |>
+  dplyr::select(TMSID, TMSID2, year) |>
+  dplyr::mutate(
+    d_road = dist_road_nearest
+  ) |> sf::st_drop_geometry()
+df_feat_correct_d_road |> head() # 6010행
+
+
+
+## 고도 `df_feat_correct_dem`, `df_feat_correct_dsm`
+df_feat_correct_dem <- chopin::extract_at(
+  x = chr_dem_file,
+  y = sf_monitors_correct,
+  radius = 1e-6,
+  force_df = TRUE
+) |>
+  dplyr::rename(dem = mean)
+
+df_feat_correct_dem |> head()   # 6010행
+
+df_feat_correct_dsm <- chopin::extract_at(
+  x = chr_dsm_file,
+  y = sf_monitors_correct,
+  radius = 1e-6,
+  force_df = TRUE
+) |>
+  dplyr::rename(dsm = mean) 
+
+df_feat_correct_dsm |> head()    # 6010행
+
+## mtpi, mtpi_1km
+df_feat_correct_mtpi <- chopin::extract_at(
+  x = terra::rast(chr_mtpi_file),
+  y = sf_monitors_correct,
+  radius = 1e-6,
+  force_df = TRUE
+) |> dplyr::rename(mtpi = mean) 
+
+df_feat_correct_mtpi_1km <- chopin::extract_at(
+  x = terra::rast(chr_mtpi_1km_file),
+  y = sf_monitors_correct,
+  radius = 1e-6,
+  force_df = TRUE
+) |> dplyr::rename(mtpi_1km = mean) 
+
+
+## emittors
+sf_emission_locs <- sf::st_read(chr_file_emission_locs, quiet = TRUE) |>
+  sf::st_transform(5179) |>
+  dplyr::filter(영업상태구분코드 == "01")
+
+sf_korea_watershed <- sf::st_read(chr_korea_watershed, quiet = TRUE) |>
+  sf::st_transform(5179)
+
+df_feat_correct_emittors <- gw_emittors(
+  input = sf_monitors_correct,
+  target = sf_emission_locs,
+  clip = sf_korea_watershed,
+  wfun = "gaussian",         # 가우시안 가중치 함수 사용
+  bw = 5000,                 # 대역폭(Bandwidth) 5km 설정
+  dist_method = "geodesic"   # 지대거리(測地線, 대권거리) 계산 방식
+) |>
+  sf::st_drop_geometry() |>
+  # gw_emission 열 이름을 n_emittors_watershed로 변경
+  dplyr::rename(n_emittors_watershed = gw_emission) |> 
+  dplyr::select(n_emittors_watershed)
+
+## landuse: 현재로서는 생략
+```
+
+## merge
+
+```{r}
+# 미세먼지 데이터 정제 (음수값 삭제)
+dt_measurements <- dt_measurements %>%
+  dplyr::mutate(
+    PM10 = ifelse(PM10 < 0, NA, PM10),
+    PM25 = ifelse(PM25 < 0, NA, PM25)
+  )
+
+# 시간별 데이터를 일별 해상도로 upscale
+dt_daily_summary <- dt_measurements %>%
+  dplyr::group_by(TMSID, TMSID2, date) %>%
+  dplyr::summarise(
+    PM10_daily = mean(PM10, na.rm = TRUE),
+    PM25_daily = mean(PM25, na.rm = TRUE),
+    .groups = "drop"
+  ) %>%
+  dplyr::mutate(
+    year = lubridate::year(date),
+    month = lubridate::month(date),
+    day = lubridate::day(date),
+    TMSID = as.character(TMSID),
+    TMSID2 = as.character(TMSID2)
+  )
+
+
+# Merging
+# 1. 기초 데이터 및 도로 변수 조인
+# TMSID, TMSID2, year를 기준으로 측정소 정보와 도로 거리를 결합
+df_res <- sf_monitors_correct |>
+  dplyr::left_join(
+    df_feat_correct_d_road, 
+    by = c("TMSID", "TMSID2", "year")
+  )
+
+# 2. 기타 공간 피처(DEM, MTPI, Emittors) 결합
+# 각 추출 결과가 sf_monitors_correct와 동일한 행 순서를 가짐을 전제로 함
+df_res <- df_res |>
+  dplyr::mutate(
+    # dsm 변수가 정의되어 있지 않다면 제외하거나 dem으로 대체 가능
+    # dsm = as.numeric(unlist(df_feat_correct_dsm)), 
+    dem = as.numeric(unlist(df_feat_correct_dem)),
+    mtpi = as.numeric(unlist(df_feat_correct_mtpi)),
+    mtpi_1km = as.numeric(unlist(df_feat_correct_mtpi_1km)),
+    n_emittors_watershed = as.numeric(unlist(df_feat_correct_emittors$n_emittors_watershed))
+  )
+
+# 3. 단위 변환 및 결측치 처리
+df_feat_correct_merged <- df_res |>
+  dplyr::mutate(
+    # 도로 거리: m -> km 단위 변환
+    d_road = as.numeric(d_road) / 1000,
+    # 배출원 수: 결측치(NA)를 0으로 처리
+    n_emittors_watershed = ifelse(is.na(n_emittors_watershed), 0, n_emittors_watershed)
+  ) |>
+  # 모델링을 위해 공간 정보(geometry) 제거
+  sf::st_drop_geometry()
+
+
+# 최종 데이터 확인
+df_feat_correct_merged <- df_res
+
+
+
+# 1. 일간 확장 수행: 기존 연간 해상도를 일간 해상도로 확장하기 위한 밑작업.
+df_feat_correct_merged_daily <- df_feat_correct_merged %>%
+  dplyr::mutate(
+    # 나중에 복구하기 위해 원본 기간 보존
+    orig_date_start = date_start,
+    orig_date_end = date_end,
+    # 확장을 위한 임시 날짜 생성
+    tmp_start = as.Date(pmax(date_start, as.POSIXct(sprintf("%d-01-01", year), tz = "Asia/Seoul"))),
+    tmp_end   = as.Date(pmin(date_end, as.POSIXct(sprintf("%d-12-31", year), tz = "Asia/Seoul"))),
+    diff_days = as.numeric(tmp_end - tmp_start) + 1
+  ) %>%
+  # 행 복제
+  tidyr::uncount(diff_days) %>%
+  # 날짜 및 시간 변수 생성
+  dplyr::group_by(TMSID, TMSID2, year, orig_date_start) %>%
+  dplyr::mutate(
+    curr_date = tmp_start + (dplyr::row_number() - 1),
+    month = lubridate::month(curr_date),
+    day   = lubridate::day(curr_date)
+  ) %>%
+  dplyr::ungroup() %>%
+  # 2. 원본 기간 복구 및 불필요 변수 제거
+  dplyr::mutate(
+    date_start = orig_date_start,
+    date_end   = orig_date_end
+  ) %>%
+  dplyr::select(-orig_date_start, -orig_date_end, -tmp_start, -tmp_end, -curr_date, -PM10, -PM25) %>%
+  dplyr::left_join(
+    dt_daily_summary %>% dplyr::select(-date), 
+    by = c("TMSID", "TMSID2", "year", "month", "day")
+  ) %>%
+  dplyr::rename(PM10 = PM10_daily, PM25 = PM25_daily) %>%
+  # NaN 방지
+  dplyr::mutate(
+    PM10 = ifelse(is.nan(PM10), NA, PM10),
+    PM25 = ifelse(is.nan(PM25), NA, PM25)
+  ) %>%
+  # 정렬 및 구조 유지
+  dplyr::relocate(year, month, day, PM10, PM25, .after = site_type) %>%
+  dplyr::arrange(TMSID, year, month, day)
+
+# 아웃라이어 제거 및 3일 rolling mean 적용
+# 1. 데이터 정렬 및 데이터테이블 설정
+setDT(df_feat_correct_merged_daily)
+setkey(df_feat_correct_merged_daily, TMSID2, year, month, day)
+
+# 2. 분석 대상 오염물질 정의
+target_pollutants <- c("PM10", "PM25")
+
+for (p in target_pollutants) {
+  
+  # 가. 지점별 극단적 아웃라이어 통제 (Capping)
+  # 황사 등 극단적 수치를 고려하여 Q3 + 3*IQR 정도로 보수적 절단 제안
+  df_feat_correct_merged_daily[, (p) := {
+    val = get(p)
+    upper_limit = quantile(val, 0.75, na.rm = TRUE) + 3 * IQR(val, na.rm = TRUE)
+    fifelse(val > upper_limit, upper_limit, val)
+  }, by = TMSID2]
+  
+  # 나. 결측치 전후 보완 (Forward Fill -> Backward Fill)
+  # 이동 평균 계산 전 NA를 제거하여 윈도우 계산 단절 방지
+  df_feat_correct_merged_daily[, (p) := nafill(get(p), type = "locf"), by = TMSID2]
+  df_feat_correct_merged_daily[, (p) := nafill(get(p), type = "nocb"), by = TMSID2]
+  
+  # 다. frollmean을 이용한 시간적 평활화 (Window size = 3일, Center 정렬)
+  # 당일과 전후 하루를 평균하여 단기 노이즈 억제
+  smooth_col_name <- paste0(p, "_smooth")
+  df_feat_correct_merged_daily[, (smooth_col_name) := frollmean(get(p), n = 3, align = "center", fill = NA), by = TMSID2]
+  
+  # 라. 평활화 이후 발생한 양 끝단 NA 재보완
+  df_feat_correct_merged_daily[, (smooth_col_name) := nafill(get(smooth_col_name), type = "locf"), by = TMSID2]
+  df_feat_correct_merged_daily[, (smooth_col_name) := nafill(get(smooth_col_name), type = "nocb"), by = TMSID2]
+}
+
+# 3. 결과 요약 확인
+summary(df_feat_correct_merged_daily[, .(PM10, PM10_smooth, PM25, PM25_smooth)])
+
+# 기존 로직과 동일하게 공간 정보 주입
+sf_monitors_correct_ref <- sf_monitors_correct %>%
+  dplyr::distinct(TMSID, TMSID2, .keep_all = TRUE) %>%
+  dplyr::select(TMSID, TMSID2, geometry)
+
+# 최종 결과 데이터프레임 구조 생성 (추출 로직은 이후 단계에서 수행 가능)
+sf_feat_correct_merged_daily <- df_feat_correct_merged_daily %>%
+  dplyr::select(-geometry) %>% 
+  dplyr::left_join(sf_monitors_correct_ref, by = c("TMSID", "TMSID2")) %>%
+  sf::st_as_sf()
+
+print(sf_feat_correct_merged_daily)
+```
+
+# CHELSA
+
+## CHELSA 데이터 불러오기
+
+```{r}
+# CHELSA
+
+### Data type: Gridded
+### Projection: Regular latitude-longitude grid
+### Horizontal coverage: Global
+### Horizontal resolution: 1 km.
+### Temporal coverage: January 1979 to 2025
+### Temporal resolution: Daily
+### File format: GRIB
+### Update frequency: active
+
+# Using Variables
+
+### tas: near-surface (usually 2 meter) air temperature (K)
+### tasmax: maximum near-surface (usually 2 meter) air temperature (K)
+### tasmin: minimum near-surface (usually 2 meter) air temperature (K)
+### rsds: Surface solar irradiance for UV calculations. (W m-2)
+### pr: Precipitation (includes both liquid and solid phases): (kg m-2 day-1)
+```
+
+```{r}
+chr_dir_climate <- "/mnt/hdd001/huimori"
+chr_CHELSA_files <- list.files(file.path(chr_dir_climate, "Chelsa"), pattern = "\\.nc$", full.names = TRUE)
+all_vars <- unique(unlist(lapply(chr_CHELSA_files, function(f) names(rast(f)))))
+```
+
+```{r}
+chr_dir_climate <- "/mnt/hdd001/huimori"
+chr_CHELSA_files <- list.files(file.path(chr_dir_climate, "Chelsa"), pattern = "\\.nc$", full.names = TRUE)
+
+# 1. 대상 변수 및 날짜 범위 설정
+var_names_unique <- c("pr", "tas", "tasmax", "tasmin", "rsds")
+target_dates <- seq(as.Date("2010-01-01"), as.Date("2024-12-31"), by = "day")
+
+message(">>> CHELSA 변수별 통합 및 단위 변환 시작...")
+
+# 2. 변수별로 루프를 돌며 모든 파일을 한 번에 처리
+processed_rasters <- lapply(var_names_unique, function(v) {
+  message(paste("[Processing Variable]", v))
+  
+  # 해당 변수를 포함하는 레이어를 가진 파일들만 순회하며 리스트 생성
+  v_list <- lapply(chr_CHELSA_files, function(f) {
+    f_name <- basename(f)
+    matched <- regmatches(f_name, regexec("([0-9]{4})_([0-9]{2})", f_name))[[1]]
+    if (length(matched) < 3) return(NULL)
+    
+    curr_date_base <- as.Date(paste(matched[2], matched[3], "01", sep = "-"))
+    # 기간 필터링
+    if (curr_date_base < as.Date("2010-01-01") || curr_date_base > as.Date("2024-12-31")) return(NULL)
+    
+    r_month <- terra::rast(f)
+    idx <- grep(paste0("^", v, "_[0-9]+$"), names(r_month))
+    
+    if (length(idx) > 0) {
+      r_sub <- r_month[[idx]]
+      # 레이어 날짜 할당 및 이름 정의
+      days_seq <- seq(curr_date_base, by = "day", length.out = nlyr(r_sub))
+      names(r_sub) <- paste0(v, "_", format(days_seq, "%Y%m%d"))
+      return(r_sub)
+    } else {
+      return(NULL)
+    }
+  })
+  
+  # NULL 제거 후 병합
+  v_list <- v_list[!sapply(v_list, is.null)]
+  if (length(v_list) == 0) return(NULL)
+  
+  combined <- terra::rast(v_list)
+  
+  # 단위 변환 (Kelvin to Celsius)
+  # if (v %in% c("tas", "tasmax", "tasmin")) {
+  #   combined <- combined - 273.15
+  # }
+  
+  # 목표 날짜 필터링 (불필요한 레이어 제거)
+  available_dates <- as.Date(gsub(paste0(v, "_"), "", names(combined)), format = "%Y%m%d")
+  combined <- combined[[which(available_dates %in% target_dates)]]
+  
+  # 좌표계 설정
+  terra::crs(combined) <- "EPSG:4326"
+  
+  return(combined)
+})
+
+# 3. 변수명 매핑 및 SDS 구성
+names(processed_rasters) <- var_names_unique
+processed_rasters <- processed_rasters[!sapply(processed_rasters, is.null)]
+
+ras_chelsa <- terra::sds(processed_rasters)
+names(ras_chelsa) <- c("precip", "temp_2m", "temp_max", "temp_min", "solar_rad")
+
+# 4. 메모리 정리 및 확인
+gc()
+message(">>> CHELSA SDS 구축 완료.")
+lapply(ras_chelsa, function(x) terra::summary(x[[1:3]]))
+```
+
+## 30m
+
+### 버퍼 값 추출
+
+```{r}
+# 1. 고유 측정소 위치 추출 (TMSID, TMSID2 기준)
+sf_monitors_ref <- sf_monitors_correct %>%
+  dplyr::distinct(TMSID, TMSID2, .keep_all = TRUE) %>%
+  dplyr::select(TMSID, TMSID2)
+
+# 2. 좌표계 통일 (Unified CS -> WGS84)
+# chopin::extract_at 연산을 위해 벡터 데이터를 라스터의 CRS(EPSG:4326)로 변환
+sf_monitors_ref_wgs84 <- sf::st_transform(sf_monitors_ref, terra::crs(ras_chelsa[1]))
+
+# 1. 변수별 추출 및 Long-format 변환
+climate_extracted_list <- lapply(names(ras_chelsa), function(var_name) {
+  message(paste(">>> [Extracting]", var_name, "with 30m buffer..."))
+  
+  # 포인트 추출 (30m 버퍼 평균)
+  ext_res <- chopin::extract_at(
+    x = ras_chelsa[[var_name]],
+    y = sf_monitors_ref_wgs84,
+    id = "TMSID2",
+    func = "mean",
+    radius = 30
+  )
+  
+  # 속성 데이터 추출 및 피벗 대상 식별
+  ext_df <- ext_res %>% sf::st_drop_geometry()
+  target_cols <- setdiff(colnames(ext_df), "TMSID2")
+  
+  # 데이터 구조 재구성
+  ext_long <- ext_df %>%
+    tidyr::pivot_longer(
+      cols = all_of(target_cols), 
+      names_to = "date_raw", 
+      values_to = var_name
+    ) %>%
+    dplyr::mutate(
+      date_str = stringr::str_extract(date_raw, "\\d{8}"),
+      year = as.numeric(substr(date_str, 1, 4)),
+      month = as.numeric(substr(date_str, 5, 6)),
+      day = as.numeric(substr(date_str, 7, 8)),
+      # 고유 식별자 TMSID 매칭
+      TMSID = sf_monitors_ref_wgs84$TMSID[match(TMSID2, sf_monitors_ref_wgs84$TMSID2)]
+    ) %>%
+    # 조인 키와 해당 기상 변수만 선택
+    dplyr::select(TMSID, TMSID2, year, month, day, !!sym(var_name)) %>%
+    dplyr::filter(!is.na(year))
+  
+  return(ext_long)
+})
+
+# 2. 기상 변수 간 통합 (temp, precip, wind 등)
+df_chelsa_30m_daily <- Reduce(
+  function(x, y) merge(x, y, by = c("TMSID", "TMSID2", "year", "month", "day"), all = TRUE), 
+  climate_extracted_list
+)
+
+df_feat_chelsa_30m_daily <- sf_feat_correct_merged_daily
+
+setDT(df_feat_chelsa_30m_daily)
+setDT(df_chelsa_30m_daily)
+
+target_vars <- names(ras_chelsa)
+all_possible_bad_cols <- c(target_vars, 
+                           paste0(target_vars, ".x"), 
+                           paste0(target_vars, ".y"))
+
+existing_vars <- intersect(names(df_feat_chelsa_30m_daily), all_possible_bad_cols)
+
+if(length(existing_vars) > 0) {
+  df_feat_chelsa_30m_daily[, (existing_vars) := NULL]
+}
+
+df_feat_correct_chelsa_30m_daily <- merge(
+  df_feat_chelsa_30m_daily, 
+  df_chelsa_30m_daily, 
+  by = c("TMSID", "TMSID2", "year", "month", "day"), 
+  all.x = TRUE
+)
+
+df_feat_correct_chelsa_30m_daily <- df_feat_correct_chelsa_30m_daily[order(TMSID2, year, month, day)]
+print(head(df_feat_correct_chelsa_30m_daily))
+```
+
+### XGBoost (with spatialsample)
+
+고정 파라미터 학습
+
+**HyperParameters**
+
+trees = 500 (n_estimators): 학습 과정에서 생성된 decision tree의 총 개수
+
+tree_depth = 6 (max_depth): 개별 나무가 아래로 얼마나 깊게 내려갈지를 결정하는 최대 층수.
+
+learn_rate = 0.05 (eta): 각 단계에서 새로 생성된 나무의 기여도를 얼마나 반영할지 결정하는 학습률.
+
+mtry = 5 (colsample_bytree): 각 노드를 분할할 때 무작위로 후보군에 포함시킬 독립 변수의 개수.
+
+min_n = 10 (min_child_weight): 노드가 더 분할되기 위해 해당 노드에 포함되어야 하는 최소 관측치 수.
+
+```{r}
+# 1. 데이터 필터링 및 피처 엔지니어링 ---------------------------------------
+setDT(df_feat_correct_chelsa_30m_daily)
+
+vec_keep_cols <- c(
+  "TMSID", "TMSID2", "year", "month", "day", "geometry",
+  "site_type", "dem", "mtpi", "mtpi_1km", "d_road",       
+  "temp_2m", "solar_rad", "precip", "PM10_smooth"
+)
+
+df_model_ready <- df_feat_correct_chelsa_30m_daily[
+  !is.na(PM10_smooth) & year >= 2010, 
+  ..vec_keep_cols
+][, `:=`(
+  doy = yday(as.Date(paste(year, month, day, sep="-"))),
+  is_weekend = factor(fifelse(wday(as.Date(paste(year, month, day, sep="-"))) %in% c(1, 7), "Yes", "No")),
+  site_type = factor(site_type),
+  d_road = as.numeric(d_road)
+)]
+
+# Spatial Sample을 위해 sf 객체로 변환
+sf_model_ready <- st_as_sf(df_model_ready)
+
+# 시계열 분할 (2010-2021: Train / 2022-2023: Test)
+df_train <- sf_model_ready %>% filter(year <= 2021)
+df_test  <- sf_model_ready %>% filter(year >= 2022)
+
+# 2. 공간적 블록 교차 검증 (Spatial Block CV) 생성 -------------------------
+set.seed(123)
+spatial_folds <- spatial_block_cv(df_train, v = 5)
+
+# 3. 모델 레시피 및 병렬 엔진 설정 -----------------------------------------
+xgb_recipe <- recipe(PM10_smooth ~ ., data = df_train) %>%
+  update_role(TMSID, TMSID2, day, geometry, new_role = "ID") %>%
+  step_dummy(all_nominal_predictors()) %>%
+  step_zv(all_predictors())
+
+# ERA5와 동일한 고성능 하이퍼파라미터 및 36코어 설정
+xgb_spec_parallel <- boost_tree(
+  trees = 500,            # 나무 개수 확장
+  tree_depth = 8,         # 복잡도 증가
+  learn_rate = 0.05,      # 학습률 최적화
+  mtry = 5,               # 변수 선택 무작위성
+  min_n = 10
+) %>% 
+  set_engine("xgboost", 
+             tree_method = "hist", 
+             nthread = 36) %>%     # 36개 코어 풀가동
+  set_mode("regression")
+
+xgb_workflow <- workflow() %>% 
+  add_recipe(xgb_recipe) %>% 
+  add_model(xgb_spec_parallel)
+
+# 4. 성능 검증 및 최종 학습 수행 -------------------------------------------
+# 외부 병렬화(future) 대신 내부 nthread 가동을 위해 sequential 설정
+future::plan("sequential")
+
+message(">>> 36개 코어 활용: CHELSA Spatial CV 시작...")
+model_metrics <- metric_set(rmse, mae, rsq)
+
+cv_results <- fit_resamples(
+  xgb_workflow,
+  resamples = spatial_folds,
+  metrics = model_metrics,
+  control = control_resamples(save_pred = FALSE, verbose = FALSE)
+)
+
+# CV 결과 출력
+print("--- Spatial CV Mean Performance ---")
+print(collect_metrics(cv_results))
+
+# 전체 학습 데이터로 최종 Fit
+message(">>> 36개 코어 활용: CHELSA 최종 모델 학습 중...")
+start_time <- Sys.time()
+final_fit <- fit(xgb_workflow, data = df_train)
+end_time <- Sys.time()
+
+message(paste(">>> 학습 완료 소요 시간:", round(end_time - start_time, 2), "초"))
+
+# 5. 외부 검증 및 성능 평가 ------------------------------------------------
+results_final_test <- predict(final_fit, df_test) %>%
+  bind_cols(df_test) %>%
+  st_drop_geometry()
+
+final_performance <- results_final_test %>% 
+  model_metrics(truth = PM10_smooth, estimate = .pred)
+
+print("--- 2022-2023 Final Test Performance for PM10 ---")
+print(final_performance)
+```
+
+```{r}
+# 1. 데이터 필터링 및 피처 엔지니어링 ---------------------------------------
+setDT(df_feat_correct_chelsa_30m_daily)
+
+vec_keep_cols <- c(
+  "TMSID", "TMSID2", "year", "month", "day", "geometry",
+  "site_type", "dem", "mtpi", "mtpi_1km", "d_road",       
+  "temp_2m", "solar_rad", "precip", "PM25_smooth"
+)
+
+df_model_ready <- df_feat_correct_chelsa_30m_daily[
+  !is.na(PM25_smooth) & year >= 2010, 
+  ..vec_keep_cols
+][, `:=`(
+  doy = yday(as.Date(paste(year, month, day, sep="-"))),
+  is_weekend = factor(fifelse(wday(as.Date(paste(year, month, day, sep="-"))) %in% c(1, 7), "Yes", "No")),
+  site_type = factor(site_type),
+  d_road = as.numeric(d_road)
+)]
+
+# Spatial Sample을 위해 sf 객체로 변환
+sf_model_ready <- st_as_sf(df_model_ready)
+
+# 시계열 분할 (2010-2021: Train / 2022-2023: Test)
+df_train <- sf_model_ready %>% filter(year <= 2021)
+df_test  <- sf_model_ready %>% filter(year >= 2022)
+
+# 2. 공간적 블록 교차 검증 (Spatial Block CV) 생성 -------------------------
+set.seed(123)
+spatial_folds <- spatial_block_cv(df_train, v = 5)
+
+# 3. 모델 레시피 및 병렬 엔진 설정 -----------------------------------------
+xgb_recipe <- recipe(PM25_smooth ~ ., data = df_train) %>%
+  update_role(TMSID, TMSID2, day, geometry, new_role = "ID") %>%
+  step_dummy(all_nominal_predictors()) %>%
+  step_zv(all_predictors())
+
+# ERA5와 동일한 고성능 하이퍼파라미터 및 36코어 설정
+xgb_spec_parallel <- boost_tree(
+  trees = 500,            # 나무 개수 확장
+  tree_depth = 8,         # 복잡도 증가
+  learn_rate = 0.05,      # 학습률 최적화
+  mtry = 5,               # 변수 선택 무작위성
+  min_n = 10
+) %>% 
+  set_engine("xgboost", 
+             tree_method = "hist", 
+             nthread = 36) %>%     # 36개 코어 풀가동
+  set_mode("regression")
+
+xgb_workflow <- workflow() %>% 
+  add_recipe(xgb_recipe) %>% 
+  add_model(xgb_spec_parallel)
+
+# 4. 성능 검증 및 최종 학습 수행 -------------------------------------------
+# 외부 병렬화(future) 대신 내부 nthread 가동을 위해 sequential 설정
+future::plan("sequential")
+
+message(">>> 36개 코어 활용: CHELSA Spatial CV 시작...")
+model_metrics <- metric_set(rmse, mae, rsq)
+
+cv_results <- fit_resamples(
+  xgb_workflow,
+  resamples = spatial_folds,
+  metrics = model_metrics,
+  control = control_resamples(save_pred = FALSE, verbose = FALSE)
+)
+
+# CV 결과 출력
+print("--- Spatial CV Mean Performance ---")
+print(collect_metrics(cv_results))
+
+# 전체 학습 데이터로 최종 Fit
+message(">>> 36개 코어 활용: CHELSA 최종 모델 학습 중...")
+start_time <- Sys.time()
+final_fit <- fit(xgb_workflow, data = df_train)
+end_time <- Sys.time()
+
+message(paste(">>> 학습 완료 소요 시간:", round(end_time - start_time, 2), "초"))
+
+# 5. 외부 검증 및 성능 평가 ------------------------------------------------
+results_final_test <- predict(final_fit, df_test) %>%
+  bind_cols(df_test) %>%
+  st_drop_geometry()
+
+final_performance <- results_final_test %>% 
+  model_metrics(truth = PM25_smooth, estimate = .pred)
+
+print("--- 2022-2023 Final Test Performance for PM25 ---")
+print(final_performance)
+```
+
+## 100m
+
+### 버퍼 값 추출
+
+```{r}
+# 1. 고유 측정소 위치 추출 (TMSID, TMSID2 기준)
+sf_monitors_ref <- sf_monitors_correct %>%
+  dplyr::distinct(TMSID, TMSID2, .keep_all = TRUE) %>%
+  dplyr::select(TMSID, TMSID2)
+
+# 2. 좌표계 통일 (Unified CS -> WGS84)
+# chopin::extract_at 연산을 위해 벡터 데이터를 라스터의 CRS(EPSG:4326)로 변환
+sf_monitors_ref_wgs84 <- sf::st_transform(sf_monitors_ref, terra::crs(ras_chelsa[1]))
+
+# 1. 변수별 추출 및 Long-format 변환
+climate_extracted_list <- lapply(names(ras_chelsa), function(var_name) {
+  message(paste(">>> [Extracting]", var_name, "with 100m buffer..."))
+  
+  # 포인트 추출 (100m 버퍼 평균)
+  ext_res <- chopin::extract_at(
+    x = ras_chelsa[[var_name]],
+    y = sf_monitors_ref_wgs84,
+    id = "TMSID2",
+    func = "mean",
+    radius = 100
+  )
+  
+  # 속성 데이터 추출 및 피벗 대상 식별
+  ext_df <- ext_res %>% sf::st_drop_geometry()
+  target_cols <- setdiff(colnames(ext_df), "TMSID2")
+  
+  # 데이터 구조 재구성
+  ext_long <- ext_df %>%
+    tidyr::pivot_longer(
+      cols = all_of(target_cols), 
+      names_to = "date_raw", 
+      values_to = var_name
+    ) %>%
+    dplyr::mutate(
+      date_str = stringr::str_extract(date_raw, "\\d{8}"),
+      year = as.numeric(substr(date_str, 1, 4)),
+      month = as.numeric(substr(date_str, 5, 6)),
+      day = as.numeric(substr(date_str, 7, 8)),
+      # 고유 식별자 TMSID 매칭
+      TMSID = sf_monitors_ref_wgs84$TMSID[match(TMSID2, sf_monitors_ref_wgs84$TMSID2)]
+    ) %>%
+    # 조인 키와 해당 기상 변수만 선택
+    dplyr::select(TMSID, TMSID2, year, month, day, !!sym(var_name)) %>%
+    dplyr::filter(!is.na(year))
+  
+  return(ext_long)
+})
+
+# 2. 기상 변수 간 통합 (temp, precip, wind 등)
+df_chelsa_100m_daily <- Reduce(
+  function(x, y) merge(x, y, by = c("TMSID", "TMSID2", "year", "month", "day"), all = TRUE), 
+  climate_extracted_list
+)
+
+df_feat_chelsa_100m_daily <- sf_feat_correct_merged_daily
+
+setDT(df_feat_chelsa_100m_daily)
+setDT(df_chelsa_100m_daily)
+
+target_vars <- names(ras_chelsa)
+all_possible_bad_cols <- c(target_vars, 
+                           paste0(target_vars, ".x"), 
+                           paste0(target_vars, ".y"))
+
+existing_vars <- intersect(names(df_feat_chelsa_100m_daily), all_possible_bad_cols)
+
+if(length(existing_vars) > 0) {
+  df_feat_chelsa_100m_daily[, (existing_vars) := NULL]
+}
+
+df_feat_correct_chelsa_100m_daily <- merge(
+  df_feat_chelsa_100m_daily, 
+  df_chelsa_100m_daily, 
+  by = c("TMSID", "TMSID2", "year", "month", "day"), 
+  all.x = TRUE
+)
+
+df_feat_correct_chelsa_100m_daily <- df_feat_correct_chelsa_100m_daily[order(TMSID2, year, month, day)]
+print(head(df_feat_correct_chelsa_100m_daily))
+```
+
+### XGBoost (with spatialsample)
+
+고정 파라미터 학습
+
+**HyperParameters**
+
+trees = 100 (n_estimators): 학습 과정에서 생성된 decision tree의 총 개수
+
+tree_depth = 6 (max_depth): 개별 나무가 아래로 얼마나 깊게 내려갈지를 결정하는 최대 층수.
+
+learn_rate = 0.1 (eta): 각 단계에서 새로 생성된 나무의 기여도를 얼마나 반영할지 결정하는 학습률.
+
+mtry = 4 (colsample_bytree): 각 노드를 분할할 때 무작위로 후보군에 포함시킬 독립 변수의 개수.
+
+min_n = 10 (min_child_weight): 노드가 더 분할되기 위해 해당 노드에 포함되어야 하는 최소 관측치 수.
+
+```{r}
+# 1. 데이터 필터링 및 피처 엔지니어링 ---------------------------------------
+setDT(df_feat_correct_chelsa_100m_daily)
+
+vec_keep_cols <- c(
+  "TMSID", "TMSID2", "year", "month", "day", "geometry",
+  "site_type", "dem", "mtpi", "mtpi_1km", "d_road",       
+  "temp_2m", "solar_rad", "precip", "PM10_smooth"
+)
+
+df_model_ready <- df_feat_correct_chelsa_100m_daily[
+  !is.na(PM10_smooth) & year >= 2010, 
+  ..vec_keep_cols
+][, `:=`(
+  doy = yday(as.Date(paste(year, month, day, sep="-"))),
+  is_weekend = factor(fifelse(wday(as.Date(paste(year, month, day, sep="-"))) %in% c(1, 7), "Yes", "No")),
+  site_type = factor(site_type),
+  d_road = as.numeric(d_road)
+)]
+
+# Spatial Sample을 위해 sf 객체로 변환
+sf_model_ready <- st_as_sf(df_model_ready)
+
+# 시계열 분할 (2010-2021: Train / 2022-2023: Test)
+df_train <- sf_model_ready %>% filter(year <= 2021)
+df_test  <- sf_model_ready %>% filter(year >= 2022)
+
+# 2. 공간적 블록 교차 검증 (Spatial Block CV) 생성 -------------------------
+set.seed(123)
+spatial_folds <- spatial_block_cv(df_train, v = 5)
+
+# 3. 모델 레시피 및 병렬 엔진 설정 -----------------------------------------
+xgb_recipe <- recipe(PM10_smooth ~ ., data = df_train) %>%
+  update_role(TMSID, TMSID2, day, geometry, new_role = "ID") %>%
+  step_dummy(all_nominal_predictors()) %>%
+  step_zv(all_predictors())
+
+# ERA5와 동일한 고성능 하이퍼파라미터 및 36코어 설정
+xgb_spec_parallel <- boost_tree(
+  trees = 500,            # 나무 개수 확장
+  tree_depth = 8,         # 복잡도 증가
+  learn_rate = 0.05,      # 학습률 최적화
+  mtry = 5,               # 변수 선택 무작위성
+  min_n = 10
+) %>% 
+  set_engine("xgboost", 
+             tree_method = "hist", 
+             nthread = 36) %>%     # 36개 코어 풀가동
+  set_mode("regression")
+
+xgb_workflow <- workflow() %>% 
+  add_recipe(xgb_recipe) %>% 
+  add_model(xgb_spec_parallel)
+
+# 4. 성능 검증 및 최종 학습 수행 -------------------------------------------
+# 외부 병렬화(future) 대신 내부 nthread 가동을 위해 sequential 설정
+future::plan("sequential")
+
+message(">>> 36개 코어 활용: CHELSA Spatial CV 시작...")
+model_metrics <- metric_set(rmse, mae, rsq)
+
+cv_results <- fit_resamples(
+  xgb_workflow,
+  resamples = spatial_folds,
+  metrics = model_metrics,
+  control = control_resamples(save_pred = FALSE, verbose = FALSE)
+)
+
+# CV 결과 출력
+print("--- Spatial CV Mean Performance ---")
+print(collect_metrics(cv_results))
+
+# 전체 학습 데이터로 최종 Fit
+message(">>> 36개 코어 활용: CHELSA 최종 모델 학습 중...")
+start_time <- Sys.time()
+final_fit <- fit(xgb_workflow, data = df_train)
+end_time <- Sys.time()
+
+message(paste(">>> 학습 완료 소요 시간:", round(end_time - start_time, 2), "초"))
+
+# 5. 외부 검증 및 성능 평가 ------------------------------------------------
+results_final_test <- predict(final_fit, df_test) %>%
+  bind_cols(df_test) %>%
+  st_drop_geometry()
+
+final_performance <- results_final_test %>% 
+  model_metrics(truth = PM10_smooth, estimate = .pred)
+
+print("--- 2022-2023 Final Test Performance for PM10 ---")
+print(final_performance)
+```
+
+```{r}
+# 1. 데이터 필터링 및 피처 엔지니어링 ---------------------------------------
+setDT(df_feat_correct_chelsa_100m_daily)
+
+vec_keep_cols <- c(
+  "TMSID", "TMSID2", "year", "month", "day", "geometry",
+  "site_type", "dem", "mtpi", "mtpi_1km", "d_road",       
+  "temp_2m", "solar_rad", "precip", "PM25_smooth"
+)
+
+df_model_ready <- df_feat_correct_chelsa_100m_daily[
+  !is.na(PM25_smooth) & year >= 2010, 
+  ..vec_keep_cols
+][, `:=`(
+  doy = yday(as.Date(paste(year, month, day, sep="-"))),
+  is_weekend = factor(fifelse(wday(as.Date(paste(year, month, day, sep="-"))) %in% c(1, 7), "Yes", "No")),
+  site_type = factor(site_type),
+  d_road = as.numeric(d_road)
+)]
+
+# Spatial Sample을 위해 sf 객체로 변환
+sf_model_ready <- st_as_sf(df_model_ready)
+
+# 시계열 분할 (2010-2021: Train / 2022-2023: Test)
+df_train <- sf_model_ready %>% filter(year <= 2021)
+df_test  <- sf_model_ready %>% filter(year >= 2022)
+
+# 2. 공간적 블록 교차 검증 (Spatial Block CV) 생성 -------------------------
+set.seed(123)
+spatial_folds <- spatial_block_cv(df_train, v = 5)
+
+# 3. 모델 레시피 및 병렬 엔진 설정 -----------------------------------------
+xgb_recipe <- recipe(PM25_smooth ~ ., data = df_train) %>%
+  update_role(TMSID, TMSID2, day, geometry, new_role = "ID") %>%
+  step_dummy(all_nominal_predictors()) %>%
+  step_zv(all_predictors())
+
+# ERA5와 동일한 고성능 하이퍼파라미터 및 36코어 설정
+xgb_spec_parallel <- boost_tree(
+  trees = 500,            # 나무 개수 확장
+  tree_depth = 8,         # 복잡도 증가
+  learn_rate = 0.05,      # 학습률 최적화
+  mtry = 5,               # 변수 선택 무작위성
+  min_n = 10
+) %>% 
+  set_engine("xgboost", 
+             tree_method = "hist", 
+             nthread = 36) %>%     # 36개 코어 풀가동
+  set_mode("regression")
+
+xgb_workflow <- workflow() %>% 
+  add_recipe(xgb_recipe) %>% 
+  add_model(xgb_spec_parallel)
+
+# 4. 성능 검증 및 최종 학습 수행 -------------------------------------------
+# 외부 병렬화(future) 대신 내부 nthread 가동을 위해 sequential 설정
+future::plan("sequential")
+
+message(">>> 36개 코어 활용: CHELSA Spatial CV 시작...")
+model_metrics <- metric_set(rmse, mae, rsq)
+
+cv_results <- fit_resamples(
+  xgb_workflow,
+  resamples = spatial_folds,
+  metrics = model_metrics,
+  control = control_resamples(save_pred = FALSE, verbose = FALSE)
+)
+
+# CV 결과 출력
+print("--- Spatial CV Mean Performance ---")
+print(collect_metrics(cv_results))
+
+# 전체 학습 데이터로 최종 Fit
+message(">>> 36개 코어 활용: CHELSA 최종 모델 학습 중...")
+start_time <- Sys.time()
+final_fit <- fit(xgb_workflow, data = df_train)
+end_time <- Sys.time()
+
+message(paste(">>> 학습 완료 소요 시간:", round(end_time - start_time, 2), "초"))
+
+# 5. 외부 검증 및 성능 평가 ------------------------------------------------
+results_final_test <- predict(final_fit, df_test) %>%
+  bind_cols(df_test) %>%
+  st_drop_geometry()
+
+final_performance <- results_final_test %>% 
+  model_metrics(truth = PM25_smooth, estimate = .pred)
+
+print("--- 2022-2023 Final Test Performance for PM25 ---")
+print(final_performance)
+```
+
+## 1000m
+
+### 버퍼 값 추출
+
+```{r}
+# 1. 고유 측정소 위치 추출 (TMSID, TMSID2 기준)
+sf_monitors_ref <- sf_monitors_correct %>%
+  dplyr::distinct(TMSID, TMSID2, .keep_all = TRUE) %>%
+  dplyr::select(TMSID, TMSID2)
+
+# 2. 좌표계 통일 (Unified CS -> WGS84)
+# chopin::extract_at 연산을 위해 벡터 데이터를 라스터의 CRS(EPSG:4326)로 변환
+sf_monitors_ref_wgs84 <- sf::st_transform(sf_monitors_ref, terra::crs(ras_chelsa[1]))
+
+# 1. 변수별 추출 및 Long-format 변환
+climate_extracted_list <- lapply(names(ras_chelsa), function(var_name) {
+  message(paste(">>> [Extracting]", var_name, "with 1000m buffer..."))
+  
+  # 포인트 추출 (1000m 버퍼 평균)
+  ext_res <- chopin::extract_at(
+    x = ras_chelsa[[var_name]],
+    y = sf_monitors_ref_wgs84,
+    id = "TMSID2",
+    func = "mean",
+    radius = 1000
+  )
+  
+  # 속성 데이터 추출 및 피벗 대상 식별
+  ext_df <- ext_res %>% sf::st_drop_geometry()
+  target_cols <- setdiff(colnames(ext_df), "TMSID2")
+  
+  # 데이터 구조 재구성
+  ext_long <- ext_df %>%
+    tidyr::pivot_longer(
+      cols = all_of(target_cols), 
+      names_to = "date_raw", 
+      values_to = var_name
+    ) %>%
+    dplyr::mutate(
+      date_str = stringr::str_extract(date_raw, "\\d{8}"),
+      year = as.numeric(substr(date_str, 1, 4)),
+      month = as.numeric(substr(date_str, 5, 6)),
+      day = as.numeric(substr(date_str, 7, 8)),
+      # 고유 식별자 TMSID 매칭
+      TMSID = sf_monitors_ref_wgs84$TMSID[match(TMSID2, sf_monitors_ref_wgs84$TMSID2)]
+    ) %>%
+    # 조인 키와 해당 기상 변수만 선택
+    dplyr::select(TMSID, TMSID2, year, month, day, !!sym(var_name)) %>%
+    dplyr::filter(!is.na(year))
+  
+  return(ext_long)
+})
+
+# 2. 기상 변수 간 통합 (temp, precip, wind 등)
+df_chelsa_1000m_daily <- Reduce(
+  function(x, y) merge(x, y, by = c("TMSID", "TMSID2", "year", "month", "day"), all = TRUE), 
+  climate_extracted_list
+)
+
+df_feat_chelsa_1000m_daily <- sf_feat_correct_merged_daily
+
+setDT(df_feat_chelsa_1000m_daily)
+setDT(df_chelsa_1000m_daily)
+
+target_vars <- names(ras_chelsa)
+all_possible_bad_cols <- c(target_vars, 
+                           paste0(target_vars, ".x"), 
+                           paste0(target_vars, ".y"))
+
+existing_vars <- intersect(names(df_feat_chelsa_1000m_daily), all_possible_bad_cols)
+
+if(length(existing_vars) > 0) {
+  df_feat_chelsa_1000m_daily[, (existing_vars) := NULL]
+}
+
+df_feat_correct_chelsa_1000m_daily <- merge(
+  df_feat_chelsa_1000m_daily, 
+  df_chelsa_1000m_daily, 
+  by = c("TMSID", "TMSID2", "year", "month", "day"), 
+  all.x = TRUE
+)
+
+df_feat_correct_chelsa_1000m_daily <- df_feat_correct_chelsa_1000m_daily[order(TMSID2, year, month, day)]
+print(head(df_feat_correct_chelsa_1000m_daily))
+```
+
+### XGBoost (with spatialsample)
+
+고정 파라미터 학습
+
+**HyperParameters**
+
+trees = 100 (n_estimators): 학습 과정에서 생성된 decision tree의 총 개수
+
+tree_depth = 6 (max_depth): 개별 나무가 아래로 얼마나 깊게 내려갈지를 결정하는 최대 층수.
+
+learn_rate = 0.1 (eta): 각 단계에서 새로 생성된 나무의 기여도를 얼마나 반영할지 결정하는 학습률.
+
+mtry = 4 (colsample_bytree): 각 노드를 분할할 때 무작위로 후보군에 포함시킬 독립 변수의 개수.
+
+min_n = 10 (min_child_weight): 노드가 더 분할되기 위해 해당 노드에 포함되어야 하는 최소 관측치 수.
+
+```{r}
+# 1. 데이터 필터링 및 피처 엔지니어링 ---------------------------------------
+setDT(df_feat_correct_chelsa_1000m_daily)
+
+vec_keep_cols <- c(
+  "TMSID", "TMSID2", "year", "month", "day", "geometry",
+  "site_type", "dem", "mtpi", "mtpi_1km", "d_road",       
+  "temp_2m", "solar_rad", "precip", "PM10_smooth"
+)
+
+df_model_ready <- df_feat_correct_chelsa_1000m_daily[
+  !is.na(PM10_smooth) & year >= 2010, 
+  ..vec_keep_cols
+][, `:=`(
+  doy = yday(as.Date(paste(year, month, day, sep="-"))),
+  is_weekend = factor(fifelse(wday(as.Date(paste(year, month, day, sep="-"))) %in% c(1, 7), "Yes", "No")),
+  site_type = factor(site_type),
+  d_road = as.numeric(d_road)
+)]
+
+# Spatial Sample을 위해 sf 객체로 변환
+sf_model_ready <- st_as_sf(df_model_ready)
+
+# 시계열 분할 (2010-2021: Train / 2022-2023: Test)
+df_train <- sf_model_ready %>% filter(year <= 2021)
+df_test  <- sf_model_ready %>% filter(year >= 2022)
+
+# 2. 공간적 블록 교차 검증 (Spatial Block CV) 생성 -------------------------
+set.seed(123)
+spatial_folds <- spatial_block_cv(df_train, v = 5)
+
+# 3. 모델 레시피 및 병렬 엔진 설정 -----------------------------------------
+xgb_recipe <- recipe(PM10_smooth ~ ., data = df_train) %>%
+  update_role(TMSID, TMSID2, day, geometry, new_role = "ID") %>%
+  step_dummy(all_nominal_predictors()) %>%
+  step_zv(all_predictors())
+
+# ERA5와 동일한 고성능 하이퍼파라미터 및 36코어 설정
+xgb_spec_parallel <- boost_tree(
+  trees = 500,            # 나무 개수 확장
+  tree_depth = 8,         # 복잡도 증가
+  learn_rate = 0.05,      # 학습률 최적화
+  mtry = 5,               # 변수 선택 무작위성
+  min_n = 10
+) %>% 
+  set_engine("xgboost", 
+             tree_method = "hist", 
+             nthread = 36) %>%     # 36개 코어 풀가동
+  set_mode("regression")
+
+xgb_workflow <- workflow() %>% 
+  add_recipe(xgb_recipe) %>% 
+  add_model(xgb_spec_parallel)
+
+# 4. 성능 검증 및 최종 학습 수행 -------------------------------------------
+# 외부 병렬화(future) 대신 내부 nthread 가동을 위해 sequential 설정
+future::plan("sequential")
+
+message(">>> 36개 코어 활용: CHELSA Spatial CV 시작...")
+model_metrics <- metric_set(rmse, mae, rsq)
+
+cv_results <- fit_resamples(
+  xgb_workflow,
+  resamples = spatial_folds,
+  metrics = model_metrics,
+  control = control_resamples(save_pred = FALSE, verbose = FALSE)
+)
+
+# CV 결과 출력
+print("--- Spatial CV Mean Performance ---")
+print(collect_metrics(cv_results))
+
+# 전체 학습 데이터로 최종 Fit
+message(">>> 36개 코어 활용: CHELSA 최종 모델 학습 중...")
+start_time <- Sys.time()
+final_fit <- fit(xgb_workflow, data = df_train)
+end_time <- Sys.time()
+
+message(paste(">>> 학습 완료 소요 시간:", round(end_time - start_time, 2), "초"))
+
+# 5. 외부 검증 및 성능 평가 ------------------------------------------------
+results_final_test <- predict(final_fit, df_test) %>%
+  bind_cols(df_test) %>%
+  st_drop_geometry()
+
+final_performance <- results_final_test %>% 
+  model_metrics(truth = PM10_smooth, estimate = .pred)
+
+print("--- 2022-2023 Final Test Performance for PM10 ---")
+print(final_performance)
+```
+
+```{r}
+# 1. 데이터 필터링 및 피처 엔지니어링 ---------------------------------------
+setDT(df_feat_correct_chelsa_1000m_daily)
+
+vec_keep_cols <- c(
+  "TMSID", "TMSID2", "year", "month", "day", "geometry",
+  "site_type", "dem", "mtpi", "mtpi_1km", "d_road",       
+  "temp_2m", "solar_rad", "precip", "PM25_smooth"
+)
+
+df_model_ready <- df_feat_correct_chelsa_1000m_daily[
+  !is.na(PM25_smooth) & year >= 2010, 
+  ..vec_keep_cols
+][, `:=`(
+  doy = yday(as.Date(paste(year, month, day, sep="-"))),
+  is_weekend = factor(fifelse(wday(as.Date(paste(year, month, day, sep="-"))) %in% c(1, 7), "Yes", "No")),
+  site_type = factor(site_type),
+  d_road = as.numeric(d_road)
+)]
+
+# Spatial Sample을 위해 sf 객체로 변환
+sf_model_ready <- st_as_sf(df_model_ready)
+
+# 시계열 분할 (2010-2021: Train / 2022-2023: Test)
+df_train <- sf_model_ready %>% filter(year <= 2021)
+df_test  <- sf_model_ready %>% filter(year >= 2022)
+
+# 2. 공간적 블록 교차 검증 (Spatial Block CV) 생성 -------------------------
+set.seed(123)
+spatial_folds <- spatial_block_cv(df_train, v = 5)
+
+# 3. 모델 레시피 및 병렬 엔진 설정 -----------------------------------------
+xgb_recipe <- recipe(PM25_smooth ~ ., data = df_train) %>%
+  update_role(TMSID, TMSID2, day, geometry, new_role = "ID") %>%
+  step_dummy(all_nominal_predictors()) %>%
+  step_zv(all_predictors())
+
+# ERA5와 동일한 고성능 하이퍼파라미터 및 36코어 설정
+xgb_spec_parallel <- boost_tree(
+  trees = 500,            # 나무 개수 확장
+  tree_depth = 8,         # 복잡도 증가
+  learn_rate = 0.05,      # 학습률 최적화
+  mtry = 5,               # 변수 선택 무작위성
+  min_n = 10
+) %>% 
+  set_engine("xgboost", 
+             tree_method = "hist", 
+             nthread = 36) %>%     # 36개 코어 풀가동
+  set_mode("regression")
+
+xgb_workflow <- workflow() %>% 
+  add_recipe(xgb_recipe) %>% 
+  add_model(xgb_spec_parallel)
+
+# 4. 성능 검증 및 최종 학습 수행 -------------------------------------------
+# 외부 병렬화(future) 대신 내부 nthread 가동을 위해 sequential 설정
+future::plan("sequential")
+
+message(">>> 36개 코어 활용: CHELSA Spatial CV 시작...")
+model_metrics <- metric_set(rmse, mae, rsq)
+
+cv_results <- fit_resamples(
+  xgb_workflow,
+  resamples = spatial_folds,
+  metrics = model_metrics,
+  control = control_resamples(save_pred = FALSE, verbose = FALSE)
+)
+
+# CV 결과 출력
+print("--- Spatial CV Mean Performance ---")
+print(collect_metrics(cv_results))
+
+# 전체 학습 데이터로 최종 Fit
+message(">>> 36개 코어 활용: CHELSA 최종 모델 학습 중...")
+start_time <- Sys.time()
+final_fit <- fit(xgb_workflow, data = df_train)
+end_time <- Sys.time()
+
+message(paste(">>> 학습 완료 소요 시간:", round(end_time - start_time, 2), "초"))
+
+# 5. 외부 검증 및 성능 평가 ------------------------------------------------
+results_final_test <- predict(final_fit, df_test) %>%
+  bind_cols(df_test) %>%
+  st_drop_geometry()
+
+final_performance <- results_final_test %>% 
+  model_metrics(truth = PM25_smooth, estimate = .pred)
+
+print("--- 2022-2023 Final Test Performance for PM25 ---")
+print(final_performance)
+```

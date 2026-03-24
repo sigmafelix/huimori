@@ -127,3 +127,17 @@ list_basefiles <-
       }
     )
   )
+
+
+# ----------------------------------------------------------------
+# 변경 log 기록(dhnyu)
+## 2026.01.31
+
+### DAG 상에서 최종 객체와 직접적으로 이어지지 않는 target 체크
+#### chr_asos_file, chr_asos_site_file, chr_landuse_files
+
+
+
+
+
+
