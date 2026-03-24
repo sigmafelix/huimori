@@ -8,6 +8,7 @@ list_fit_models <-
         pat <- paste(
         c(
           "dsm", "dem", "d_road", "mtpi", "n_emittors_watershed",
+          "blh",
           sprintf(
             "landuse_frac_%d",
             c(10, 11, 20, 51, 52, 61, 62, 71, 72,
@@ -62,7 +63,7 @@ list_tune_models <-
       command = {
         yvar <- as.character(form_fit)[2]
         data_sub <- df_feat_correct_merged %>%
-          dplyr::filter(year == int_years_spatial) %>%
+          # dplyr::filter(year == int_years_spatial) %>%
           .[!is.na(.[[yvar]]), ] %>% # Filter out NA values for the outcome variable
           dplyr::mutate(site_type = droplevels(site_type))
         data_sub <-
@@ -85,10 +86,11 @@ list_tune_models <-
         attr(res, "year") <- int_years_spatial
         res
       },
-      pattern = cross(int_years_spatial, form_fit),
+      # pattern = cross(int_years_spatial, form_fit),
+      pattern = map(form_fit),
       iteration = "list",
       resources = targets::tar_resources(
-        crew = targets::tar_resources_crew(controller = "controller_04")
+        crew = targets::tar_resources_crew(controller = "controller_10")
       )
     ),
     targets::tar_target(
