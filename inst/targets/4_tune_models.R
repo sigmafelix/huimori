@@ -282,6 +282,95 @@ list_tune_models <-
 
   )
 
+
+list_tune_eval <- list(
+  targets::tar_target(
+    name = df_tune_correct_metrics,
+    command = {
+      df_metrics <- tune::collect_metrics(workflow_tune_xgb_correct_spatial)
+      df_metrics
+    },
+    pattern = map(workflow_tune_xgb_correct_spatial),
+    iteration = "list",
+    resources = targets::tar_resources(
+      crew = targets::tar_resources_crew(controller = "controller_08")
+    )
+  ),
+  # Variable importance from the best model in the tuning results
+  targets::tar_target(
+    name = df_tune_correct_vip,
+    command = {
+      train_variables <-
+        workflow_tune_xgb_correct_spatial |>
+        attr("workflow") |>
+        _[["pre"]] |>
+        _[["actions"]] |>
+        _[["recipe"]] |>
+        _[["recipe"]]
+
+      train_data <-
+        train_variables[["template"]]
+
+      names_variables <-
+        train_variables |>
+        _[["var_info"]] |>
+        _[["variable"]]
+      # remove the outcome variable
+      names_target <- names_variables[length(names_variables)]
+      names_variables <- names_variables[-length(names_variables)]
+      names_variables
+
+
+      df_train_fit <-
+        workflow_tune_xgb_correct_spatial %>%
+        tune::fit_best() %>%
+        tune::extract_fit_parsnip()
+
+      pfun_shap <- function(object, newdata) {
+        predict(object, new_data = newdata, type = "raw")
+      }
+
+      # requires fastshap
+      df_vip_fastshap <-
+        vip::vi(
+          object = df_train_fit,
+          pred_wrapper = pfun_shap,
+          method = "shap",
+          feature_names = names_variables,
+          train = train_data
+        ) |>
+        dplyr::rename(
+          importance_shap = Importance
+        )
+      df_vip_permute <-
+        vip::vi(
+          object = df_train_fit,
+          method = "permute",
+          feature_names = names_variables,
+          train = train_data,
+          target = names_target,
+          pred_wrapper = pfun_shap,
+          metric = "rmse"
+        ) |>
+        dplyr::rename(
+          importance_permute = Importance
+        )
+      df_vip <-
+        dplyr::left_join(
+          df_vip_fastshap, df_vip_permute, by = "Variable"
+        )
+      df_vip
+    },
+    pattern = map(workflow_tune_xgb_correct_spatial),
+    iteration = "list",
+    resources = targets::tar_resources(
+      crew = targets::tar_resources_crew(controller = "controller_08")
+    )
+  )
+
+)
+
+
 list_pred_process <-
   list(
     targets::tar_target(
