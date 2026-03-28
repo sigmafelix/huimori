@@ -917,7 +917,40 @@ list_process_feature <-
       iteration = "list"
     ),
     ### F09. CHELSA ####
-    
+    targets::tar_target(
+      name = df_feat_correct_chelsa,
+      command = {
+        int_year_chelsa <-
+          int_aod_year_chunks
+        chr_file_chelsa <-
+          list.files(
+            pattern = paste0("CHELSA_", int_year_chelsa, "_[0-9]{2,2}.nc$"),
+            path = chr_dir_chelsa,
+            full.names = TRUE,
+            recursive = TRUE
+          )
+
+        chelsa_ras <- terra::rast(chr_file_chelsa)
+        layer_unique <- unique(terra::varnames(chelsa_ras))
+        layer_names <- names(chelsa_ras)
+        layer_names <- gsub("_[0-9]{1,3}", "", layer_names)
+
+        # Find which layers correspond to which unique variable
+        indices_app <- match(layer_names, layer_unique)
+        chelsa_ras <-
+          terra::tapp(chelsa_ras, index = indices_app, fun = "median")
+        names(chelsa_ras) <- layer_unique
+
+        chopin::extract_at(
+          x = chelsa_ras,
+          y = sf_monitors_correct_yr,
+          radius = 1e-6,
+          id = c("TMSID", "TMSID2", "year"),
+          force_df = TRUE
+        )
+      },
+      pattern = map(sf_monitors_correct_yr, int_aod_year_chunks)
+    ),
     ### F10. BLH (ERA5) ####
     targets::tar_target(
       name = rast_era5_blh,
@@ -1108,7 +1141,7 @@ list_process_feature <-
       }
     ),
     # Incorrect addresses
-   targets::tar_target(
+    targets::tar_target(
       name = df_feat_incorrect_d_road,
       command = {
         road <- sf::st_read(chr_road_files, quiet = TRUE)
