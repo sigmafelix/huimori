@@ -2,7 +2,7 @@
 library(terra)
 
 range <- c(124.5, 131.9, 32.8, 38.9)
-years <- seq(2009, 2022)
+years <- seq(2010, 2021)
 
 for (y in years) {
   url <- sprintf(
@@ -13,7 +13,7 @@ for (y in years) {
   message("Writing GLC-FCS30D data for year: ", y)
   writeRaster(
     luras,
-    file.path("/mnt/s/Korea/landuse", sprintf("lc_glc_fcs30d_30m_%d.tif", y)),
+    file.path("/home/felix/Documents/landuse", sprintf("lc_glc_fcs30d_30m_%d.tif", y)),
     overwrite = TRUE,
     datatype = "INT8U", # Unsigned 8-bit integer (since the highest value is 210)
     gdal = c("COMPRESS=DEFLATE")

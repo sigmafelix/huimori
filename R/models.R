@@ -988,7 +988,7 @@ fit_tidy_xgb <-
         min_n(c(3, 31)),
         tree_depth(c(3, 10)),
         learn_rate(range = c(-4, -1), trans = transform_log10()),
-        size = 50
+        size = 100
       )
 
     mset <- yardstick::metric_set(
@@ -1004,11 +1004,10 @@ fit_tidy_xgb <-
     if (is.null(strata)) {
       stratified <- rsample::vfold_cv(data = data, v = 5)
     }
-    if (is.character(strata)) {
-      stratified <- rsample::group_vfold_cv(data = data, group = strata, v = NULL)
-    }
     if (strata == "spatial") {
       stratified <- spatialsample::spatial_block_cv(data = data, method = "snake", v = 5)
+    } else if (is.character(strata)) {
+      stratified <- rsample::group_vfold_cv(data = data, group = strata, v = NULL)
     }
 
     xgb_res <-

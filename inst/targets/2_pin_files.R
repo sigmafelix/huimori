@@ -18,10 +18,13 @@ list_basefiles <-
     ),
     ## B03. Landuse data ####
     targets::tar_target(
-      name = chr_landuse_file,
+      name = chr_landuse_files,
       command = {
         glc_dir <- file.path(chr_dir_data, "landuse", "glc_fcs30d")
-        list.files(glc_dir, pattern = "tif$", full.names = TRUE)
+        yrs <- unlist(int_years_spatial)
+        yrs <- yrs - 1L
+        yrs_pattern <- paste0(yrs, collapse = "|")
+        list.files(glc_dir, pattern = paste0("(", yrs_pattern, ")", "\\.tif$"), full.names = TRUE)
       },
       iteration = "list"
     ),
@@ -99,17 +102,18 @@ list_basefiles <-
       command = {
         # 1km mask
         year <- stringi::stri_extract_first_regex(
-          chr_landuse_file, pattern = "20[0-2][0-9]"
+          chr_landuse_files, pattern = "20[0-2][0-9]"
         )
         year <- as.integer(year)
         year_file_name <- sprintf("glc_freq_%d.tif", year)
         file.path(chr_dir_data, "landuse", year_file_name)
       },
       iteration = "list",
-      pattern = map(chr_landuse_file),
+      pattern = map(chr_landuse_files),
       resources = targets::tar_resources(
         crew = targets::tar_resources_crew(controller = "controller_01")
-      )
+      ),
+      cue = tar_cue(mode = "never")
     ),
     ## B11. Emission locations ####
     targets::tar_target(
@@ -117,37 +121,27 @@ list_basefiles <-
       command = file.path(chr_dir_data, "emission", "data", "emission_location.gpkg")
     ),
     targets::tar_target(
-      name = chr_landuse_files,
-      command = {
-        list.files(
-          file.path(chr_dir_data, "landuse", "glc_fcs30d"),
-          pattern = ".tif$",
-          full.names = TRUE
-        )
-      }
-    ),
-    targets::tar_target(
       name = chr_dir_aod,
       command = {
-        list.files(
-          file.path(chr_dir_data, "airquality", "aod"),
-          pattern = ".tif$",
-          full.names = TRUE
-        )
+        file.path(chr_dir_data, "airquality", "aod")
       }
+    ),
+    ## B12. ERA5 ####
+    targets::tar_target(
+      name = chr_dir_climate,
+      command = file.path(chr_dir_data, "climate")
+    ),
+    targets::tar_target(
+      name = chr_dir_era5_land,
+      command = file.path(chr_dir_climate, "ERA5_Land")
+    ),
+    targets::tar_target(
+      name = chr_dir_era5_blh,
+      command = file.path(chr_dir_climate, "ERA5_BLH")
+    ),
+    ## B13. CHELSA ####
+    targets::tar_target(
+      name = chr_dir_chelsa,
+      command = file.path(chr_dir_climate, "Chelsa")
     )
   )
-
-
-# ----------------------------------------------------------------
-# 변경 log 기록(dhnyu)
-## 2026.01.31
-
-### DAG 상에서 최종 객체와 직접적으로 이어지지 않는 target 체크
-#### chr_asos_file, chr_asos_site_file, chr_landuse_files
-
-
-
-
-
-

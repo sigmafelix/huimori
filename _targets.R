@@ -29,17 +29,17 @@ controller_20 <-
 # Set target options:
 targets::tar_option_set(
   packages =
-    c("targets",# "geotargets", 
+    c("targets", "geotargets",
       "terra", "sf", "dplyr", "collapse",
       "data.table", "tibble", "tune", "yardstick", "workflows",
       "recipes", "dials", "lubridate", "rgee",
       "chopin", "mirai", "parsnip", "finetune", "huimori", "nanoparquet",
-      "readxl", "bonsai", "lightgbm", "xgboost", "crew"),
+      "readxl", "bonsai", "lightgbm", "xgboost", "crew", "fastshap"),
   format = "qs", # Optionally set the default storage format. qs is fast.
   controller = crew::crew_controller_group(
+    controller_08,
     controller_01,
     controller_04,
-    controller_08,
     controller_10,
     controller_15,
     controller_20
@@ -66,5 +66,6 @@ list(
   list_process_feature,
   list_process_split,
   list_fit_models,
-  list_tune_models
+  list_tune_models,
+  list_tune_eval
 )

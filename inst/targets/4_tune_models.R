@@ -5,16 +5,22 @@ list_fit_models <-
     targets::tar_target(
       name = chr_terms_x,
       command = {
+        pat <- paste(
         c(
           "dsm", "dem", "d_road", "mtpi", "n_emittors_watershed",
+          "blh",
           sprintf(
-            "frac_%d",
+            "landuse_frac_%d",
             c(10, 11, 20, 51, 52, 61, 62, 71, 72,
               82, 91, 130, 150, 181, 182, 183, 186, 187,
               190, 200, 210
             )
-          )
+          ),
+          "aod"
+        ),
+        collapse = "|"
         )
+        grep(pat, names(df_feat_correct_merged), value = TRUE)
       }
     )
     ,
@@ -53,27 +59,61 @@ list_fit_models <-
 list_tune_models <-
   list(
     targets::tar_target(
-      name = int_years_spatial,
-      command = seq(2015, 2023, 1)
-    ),
-    targets::tar_target(
-      name = workflow_tune_correct_spatial,
+      name = workflow_tune_xgb_correct_spatial,
       command = {
         yvar <- as.character(form_fit)[2]
         data_sub <- df_feat_correct_merged %>%
-          dplyr::filter(year == int_years_spatial) %>%
+          # dplyr::filter(year == int_years_spatial) %>%
           .[!is.na(.[[yvar]]), ] %>% # Filter out NA values for the outcome variable
           dplyr::mutate(site_type = droplevels(site_type))
+        data_sub <-
+          data_sub |>
+          dplyr::mutate(
+            latitude = as.double(stringi::stri_extract_first_regex(coords_google, pattern = "[3-4][0-9]\\.[0-9]{2,8}")),
+            longitude = as.double(stringi::stri_extract_last_regex(coords_google, pattern = "1[2-4][0-9]\\.[0-9]{2,8}"))
+          ) |>
+          sf::st_as_sf(coords = c("longitude", "latitude"), crs = 4326) |>
+          sf::st_transform(crs = "EPSG:5179")
+
         res <-
           fit_tidy_xgb(
             data = data_sub,
             formula = form_fit,
             invars = chr_terms_x,
-            strata = "site_type",
+            strata = "spatial",
             device = "cpu"
           )
         attr(res, "year") <- int_years_spatial
         res
+      },
+      # pattern = cross(int_years_spatial, form_fit),
+      pattern = map(form_fit),
+      iteration = "list",
+      resources = targets::tar_resources(
+        crew = targets::tar_resources_crew(controller = "controller_10")
+      )
+    ),
+    targets::tar_target(
+      name = workflow_tune_mamba_correct_spatial,
+      command = {
+        data_sub <- df_feat_correct_merged %>%
+          dplyr::filter(year == int_years_spatial) %>%
+          .[!is.na(.[[yvar]]), ] %>% # Filter out NA values for the outcome variable
+          dplyr::mutate(site_type = droplevels(site_type))
+
+        data_sub
+        # formula-like interface:
+        # tidied data into tensors to run mamba
+        # res <-
+        #   fit_torch_mamba(
+        #     data = data_sub,
+        #     formula = form_fit,
+        #     invars = chr_terms_x,
+        #     strata = "site_type",
+        #     device = "cpu"
+        #   )
+        # attr(res, "year") <- int_years_spatial
+        # res
       },
       pattern = cross(int_years_spatial, form_fit),
       iteration = "list",
@@ -82,7 +122,7 @@ list_tune_models <-
       )
     ),
     targets::tar_target(
-      name = workflow_tune_incorrect_spatial,
+      name = workflow_tune_xgb_incorrect_spatial,
       command = {
         yvar <- as.character(form_fit)[2]
         data_sub <- df_feat_incorrect_merged %>%
@@ -98,6 +138,33 @@ list_tune_models <-
       iteration = "list",
       resources = targets::tar_resources(
         crew = targets::tar_resources_crew(controller = "controller_08")
+      )
+    ),
+    targets::tar_target(
+      name = workflow_tune_mamba_incorrect_spatial,
+      command = {
+        data_sub <- df_feat_correct_merged %>%
+          dplyr::filter(year == int_years_spatial) %>%
+          .[!is.na(.[[yvar]]), ] %>% # Filter out NA values for the outcome variable
+          dplyr::mutate(site_type = droplevels(site_type))
+        data_sub
+        # formula-like interface:
+        # tidied data into tensors to run mamba
+        # res <-
+        #   fit_torch_mamba(
+        #     data = data_sub,
+        #     formula = form_fit,
+        #     invars = chr_terms_x,
+        #     strata = "site_type",
+        #     device = "cpu"
+        #   )
+        # attr(res, "year") <- int_years_spatial
+        # res
+      },
+      pattern = cross(int_years_spatial, form_fit),
+      iteration = "list",
+      resources = targets::tar_resources(
+        crew = targets::tar_resources_crew(controller = "controller_04")
       )
     ),
     # targets::tar_target(
@@ -125,7 +192,7 @@ list_tune_models <-
     #   iteration = "list"
     # ),
     targets::tar_target(
-      name = workflow_fit_correct,
+      name = workflow_fit_xgb_correct,
       command = {
         yvar <- tune::outcome_names(workflow_tune_correct_spatial)
 
@@ -214,6 +281,95 @@ list_tune_models <-
     )
 
   )
+
+
+list_tune_eval <- list(
+  targets::tar_target(
+    name = df_tune_correct_metrics,
+    command = {
+      df_metrics <- tune::collect_metrics(workflow_tune_xgb_correct_spatial)
+      df_metrics
+    },
+    pattern = map(workflow_tune_xgb_correct_spatial),
+    iteration = "list",
+    resources = targets::tar_resources(
+      crew = targets::tar_resources_crew(controller = "controller_08")
+    )
+  ),
+  # Variable importance from the best model in the tuning results
+  targets::tar_target(
+    name = df_tune_correct_vip,
+    command = {
+      train_variables <-
+        workflow_tune_xgb_correct_spatial |>
+        attr("workflow") |>
+        _[["pre"]] |>
+        _[["actions"]] |>
+        _[["recipe"]] |>
+        _[["recipe"]]
+
+      train_data <-
+        train_variables[["template"]]
+
+      names_variables <-
+        train_variables |>
+        _[["var_info"]] |>
+        _[["variable"]]
+      # remove the outcome variable
+      names_target <- names_variables[length(names_variables)]
+      names_variables <- names_variables[-length(names_variables)]
+      names_variables
+
+
+      df_train_fit <-
+        workflow_tune_xgb_correct_spatial %>%
+        tune::fit_best() %>%
+        tune::extract_fit_parsnip()
+
+      pfun_shap <- function(object, newdata) {
+        predict(object, new_data = newdata, type = "raw")
+      }
+
+      # requires fastshap
+      df_vip_fastshap <-
+        vip::vi(
+          object = df_train_fit,
+          pred_wrapper = pfun_shap,
+          method = "shap",
+          feature_names = names_variables,
+          train = train_data
+        ) |>
+        dplyr::rename(
+          importance_shap = Importance
+        )
+      df_vip_permute <-
+        vip::vi(
+          object = df_train_fit,
+          method = "permute",
+          feature_names = names_variables,
+          train = train_data,
+          target = names_target,
+          pred_wrapper = pfun_shap,
+          metric = "rmse"
+        ) |>
+        dplyr::rename(
+          importance_permute = Importance
+        )
+      df_vip <-
+        dplyr::left_join(
+          df_vip_fastshap, df_vip_permute, by = "Variable"
+        )
+      df_vip
+    },
+    pattern = map(workflow_tune_xgb_correct_spatial),
+    iteration = "list",
+    resources = targets::tar_resources(
+      crew = targets::tar_resources_crew(controller = "controller_08")
+    )
+  )
+
+)
+
 
 list_pred_process <-
   list(

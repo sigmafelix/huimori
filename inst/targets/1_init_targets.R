@@ -19,7 +19,9 @@ list_configs <-
         if (Sys.getenv("USER") == "isong") {
           file.path(Sys.getenv("HOME"), "GitHub", "histmap-ko")
         } else if (Sys.getenv("USER") == "songlab") {
-          file.path(Sys.getenv("HOME"), "histmap-ko")
+          file.path("/members", "songlab", "GitHub", "histmap-ko")
+        } else if (Sys.getenv("USER") == "felix") {
+          file.path(Sys.getenv("HOME"), "GitHub", "histmap-ko")
         } else {
           file.path(Sys.getenv("HOME"), "Documents")
         }
@@ -28,6 +30,10 @@ list_configs <-
     targets::tar_target(
       name = chr_date_range,
       # this command should be modified to adjust the range of prediction
-      command = c(as.Date("2019-01-01"), as.Date("2023-12-31"))
+      command = c(as.Date("2015-01-01"), as.Date("2023-12-31"))
+    ),
+    targets::tar_target(
+      name = int_years_spatial,
+      command = seq(2015, 2023, 1)
     )
   )
