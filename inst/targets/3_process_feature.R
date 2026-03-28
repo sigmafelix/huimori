@@ -460,28 +460,6 @@ list_process_split <-
       name = int_split_grid_ids,
       command = seq_len(nrow(sf_grid_correct_split)),
       iteration = "list"
-    ),
-    targets::tar_target(
-      list_pred_calc_grid_old,
-      command = {
-        grid_unit <- sf::st_bbox(sf_grid_correct_split[int_split_grid_ids, ])
-        sf::st_as_sf(
-          sf_grid_size |>
-            dplyr::filter(
-              (X <= grid_unit[3] & X >= grid_unit[1]) &
-              (Y <= grid_unit[4] & Y >= grid_unit[2])
-            ),
-          coords = c("X", "Y"),
-          crs = 5179,
-          remove = FALSE
-        )
-      },
-      iteration = "list",
-      pattern = map(int_split_grid_ids),
-      description = "Split prediction grid into list by chopin grid",
-      resources = targets::tar_resources(
-        crew = targets::tar_resources_crew(controller = "controller_15")
-      )
     )
   )
 
@@ -1385,7 +1363,7 @@ list_process_feature <-
           crs_vec <- "EPSG:5179"
           ext_reproj <-
             terra::project(
-              terra::ext(list_pred_calc_grid_i) + 1000,
+              terra::ext(list_pred_calc_grid_i) + 3000,
               crs_vec, crs_ras
             )
 
@@ -1398,7 +1376,8 @@ list_process_feature <-
             chopin::extract_at(
               x = landuse_ras,
               y = list_pred_calc_grid_i,
-              radius = 100,
+              radius = int_landuse_radius,
+              id = c("TMSID", "TMSID2", "year"),
               func = "frac",
               force_df = TRUE
             )
@@ -1406,24 +1385,16 @@ list_process_feature <-
           rm(extracted_i)
         }
 
-        collapse::rowbind(init_list, fill = TRUE)
+        df_extract <- collapse::rowbind(init_list, fill = TRUE)
 
-        # old implementation
-        # landuse_ras <-
-        #   terra::rast(chr_landuse_files[length(chr_landuse_files)], win = c(124, 132.5, 33, 38.6))
-
-        # # landuse_freq <-
-        # #   terra::rast(file.path(chr_dir_data, "landuse_freq_glc_fcs30d_2022.tif"))
-        # chopin::extract_at(
-        #   x = landuse_ras,
-        #   y = list_pred_calc_grid,
-        #   radius = 100,
-        #   func = "frac",
-        #   force_df = TRUE
-        # )
+        df_extract |>
+          dplyr::rename_with(
+            .cols = dplyr::contains("frac"),
+            .fn = ~ paste0("landuse_", ., "_", int_landuse_radius)
+          )
       },
       iteration = "list",
-      pattern = cross(list_pred_calc_grid, chr_landuse_files),
+      pattern = cross(cross(list_pred_calc_grid, chr_landuse_files), int_landuse_radius),
       resources = targets::tar_resources(
         crew = targets::tar_resources_crew(controller = "controller_20")
       )
@@ -1489,7 +1460,7 @@ list_process_feature <-
          dplyr::bind_cols(df_feat_grid_landuse)
        df_res %>%
          dplyr::mutate(
-           dsm = as.numeric(df_feat_grid_dsm), 
+           dsm = as.numeric(df_feat_grid_dsm),
            dem = as.numeric(df_feat_grid_dem),
            mtpi = as.numeric(df_feat_grid_mtpi),
            n_emittors_watershed = as.numeric(df_feat_grid_emittors$n_emittors_watershed),
