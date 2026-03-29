@@ -14,7 +14,7 @@ use chunking::ChunkGrid;
 use cli::Args;
 use crs::{calculate_radius_in_cells, detect_radius_mode};
 use error::{FocalMeanError, Result};
-use gdal::{Dataset, Metadata};
+use gdal::Dataset;
 
 fn main() -> Result<()> {
     let args = Args::parse();
@@ -151,8 +151,7 @@ fn process_full_raster(
                 gdal::raster::Buffer::new((metadata.width, metadata.height), band_slice.to_vec());
 
             raster_band.write((0, 0), (metadata.width, metadata.height), &mut buffer)?;
-            raster_band.set_description(&format!("class_{:02}", class_value))?;
-            raster_band.set_no_data_value(Some(f64::NAN))?;
+            io::set_band_class_metadata(&mut raster_band, class_value)?;
         }
 
         // Build overviews
@@ -207,8 +206,7 @@ fn process_chunked(
     for (i, &class_value) in classes.iter().enumerate() {
         let band_index = i + 1;
         let mut raster_band = output_dataset.rasterband(band_index)?;
-        raster_band.set_description(&format!("class_{:02}", class_value))?;
-        raster_band.set_no_data_value(Some(f64::NAN))?;
+        io::set_band_class_metadata(&mut raster_band, class_value)?;
     }
 
     // Process each chunk

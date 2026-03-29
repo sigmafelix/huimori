@@ -18,6 +18,19 @@ pub struct RasterMetadata {
     pub pixel_height: f64,
 }
 
+/// Return a stable output layer name for a landuse class band.
+pub fn class_band_name(class_value: i32) -> String {
+    format!("landuse_class_{class_value:02}")
+}
+
+/// Apply output metadata for a landuse class band.
+pub fn set_band_class_metadata(raster_band: &mut RasterBand, class_value: i32) -> Result<()> {
+    raster_band.set_description(&class_band_name(class_value))?;
+    raster_band.set_metadata_item("LANDUSE_CLASS", &class_value.to_string(), "")?;
+    raster_band.set_no_data_value(Some(f64::NAN))?;
+    Ok(())
+}
+
 /// Read input categorical raster and metadata
 pub fn read_input_raster(path: &str) -> Result<(Array2<i32>, RasterMetadata)> {
     info!("Opening input raster: {}", path);
@@ -103,12 +116,7 @@ pub fn write_multiband_output(
         );
 
         raster_band.write((0, 0), (metadata.width, metadata.height), &mut buffer)?;
-
-        // Set band description (e.g., "class_01")
-        raster_band.set_description(&format!("class_{:02}", class_value))?;
-
-        // Set nodata for output bands (use NaN for float32)
-        raster_band.set_no_data_value(Some(f64::NAN))?;
+        set_band_class_metadata(&mut raster_band, class_value)?;
     }
 
     info!("Successfully wrote {} bands to output", bands.len());

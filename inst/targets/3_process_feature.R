@@ -1344,64 +1344,63 @@ list_process_feature <-
     targets::tar_target(
       name = df_feat_grid_landuse,
       command = {
-        init_list <- list()
-        # another implementation: memory-minded
-        list_10k_split <-
-          list_pred_calc_grid |>
-          nrow() |>
-          seq_len()
-        list_10k_split <-
-          ceiling(list_10k_split / 5e4)
-        for (i in seq_len(max(list_10k_split))) {
-          list_pred_calc_grid_i <-
-            list_pred_calc_grid[list_10k_split == i, ]
-          if (nrow(list_pred_calc_grid_i) == 0) {
-            next
-          }
+        chunk_size <- 2e4L
+        n_grid <- nrow(list_pred_calc_grid)
+        n_chunk <- ceiling(n_grid / chunk_size)
+        pad_m <- int_landuse_radius + 100
+        year_landuse <- as.integer(
+          gsub(".*?(20[0-9]{2,2}).*", "\\1", basename(chr_landuse_freq_file))
+        )
+        init_list <- vector("list", n_chunk)
 
-          crs_ras <- "EPSG:4326"
-          crs_vec <- "EPSG:5179"
+        for (i in seq_len(n_chunk)) {
+          idx_start <- ((i - 1L) * chunk_size) + 1L
+          idx_end <- min(i * chunk_size, n_grid)
+          list_pred_calc_grid_i <- list_pred_calc_grid[idx_start:idx_end, ]
+
           ext_reproj <-
             terra::project(
-              terra::ext(list_pred_calc_grid_i) + 3000,
-              crs_vec, crs_ras
+              terra::ext(list_pred_calc_grid_i) + pad_m,
+              from = "EPSG:5179",
+              to = "EPSG:4326"
             )
 
           landuse_ras <-
             terra::rast(
-              chr_landuse_files,
+              chr_landuse_freq_file,
               win = ext_reproj
-            )
-          year_landuse <- as.integer(
-              gsub(".*?(20[0-9]{2,2}).*", "\\1", basename(chr_landuse_files))
             )
 
           list_pred_calc_grid_i[["year"]] <- year_landuse
-          extracted_i <-
+          init_list[[i]] <-
             chopin::extract_at(
               x = landuse_ras,
               y = list_pred_calc_grid_i,
               radius = int_landuse_radius,
               id = c("gid", "year"),
-              func = "frac",
+              func = "mean",
               force_df = TRUE
             )
-          init_list[[i]] <- extracted_i
-          rm(extracted_i)
+
+          rm(landuse_ras, list_pred_calc_grid_i)
+          if (i %% 10L == 0L) {
+            gc(FALSE)
+          }
         }
 
         df_extract <- collapse::rowbind(init_list, fill = TRUE)
+        cols_landuse <- setdiff(names(df_extract), c("gid", "year"))
 
         df_extract |>
           dplyr::rename_with(
-            .cols = dplyr::contains("frac"),
+            .cols = dplyr::all_of(cols_landuse),
             .fn = ~ paste0("landuse_", ., "_", int_landuse_radius)
           )
       },
       iteration = "list",
-      pattern = cross(cross(list_pred_calc_grid, chr_landuse_files), int_landuse_radius),
+      pattern = cross(cross(list_pred_calc_grid, chr_landuse_freq_file), int_landuse_radius),
       resources = targets::tar_resources(
-        crew = targets::tar_resources_crew(controller = "controller_20")
+        crew = targets::tar_resources_crew(controller = "controller_40")
       )
     ),
     targets::tar_target(
@@ -1506,4 +1505,3 @@ list_process_feature <-
 #### (2) 대기질 농도에서 음수값(-999로 기록됨)은 결측치 처리
 
 ### df_feat_correct_merged 수정: landuse 변경사항에 맞게 수정
-
