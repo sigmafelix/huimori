@@ -22,9 +22,11 @@ controller_15 <-
   crew::crew_controller_local(name = "controller_15", workers = 15)
 controller_20 <-
   crew::crew_controller_local(name = "controller_20", workers = 20)
+controller_40 <-
+  crew::crew_controller_local(name = "controller_40", workers = 40)
 
 
-
+  
 
 # Set target options:
 targets::tar_option_set(

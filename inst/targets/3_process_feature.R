@@ -1369,15 +1369,20 @@ list_process_feature <-
 
           landuse_ras <-
             terra::rast(
-              chr_landuse_freq_file,
+              chr_landuse_files,
               win = ext_reproj
             )
+          year_landuse <- as.integer(
+              gsub(".*?(20[0-9]{2,2}).*", "\\1", basename(chr_landuse_files))
+            )
+
+          list_pred_calc_grid_i[["year"]] <- year_landuse
           extracted_i <-
             chopin::extract_at(
               x = landuse_ras,
               y = list_pred_calc_grid_i,
               radius = int_landuse_radius,
-              id = c("TMSID", "TMSID2", "year"),
+              id = c("gid", "year"),
               func = "frac",
               force_df = TRUE
             )
