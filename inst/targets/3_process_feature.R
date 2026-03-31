@@ -603,6 +603,55 @@ list_process_feature <-
       },
       iteration = "list"
     ),
+    ## Preprocessed landuse fraction files (to save time for repeated runs)
+    targets::tar_target(
+      name = chr_landuse_freq_files,
+      command = {
+          years <- stringi::stri_extract_first_regex(
+            chr_landuse_files, pattern = "20[0-2][0-9]"
+          )
+          year <- as.integer(years)
+          if (!dir.exists(file.path(chr_dir_data, "landuse", "preprocessed"))) {
+            dir.create(file.path(chr_dir_data, "landuse", "preprocessed"))
+          }
+          int_radius_cells <- int_landuse_radius %/% 30L
+          chr_radius_cells <- as.character(int_radius_cells)
+          # assuming 30m resolution for landuse rasters
+
+          chr_output_file <-
+            file.path(
+              chr_dir_data, "landuse",
+              "preprocessed",
+              sprintf("landuse_fraction_%d_%04d.tif", year, int_landuse_radius)
+            )
+
+        cmd <-
+          c(
+            "--input", chr_landuse_files,
+            "--output", chr_output_file,
+              "--radius", chr_radius_cells, "--radius-in-cells",
+              "--chunksize", "2048",
+              "--threads", "4",
+              "--compression", "ZSTD",
+              "--verbose"
+          )
+        # cmd_bin <- if (basename(tool_bin) == "cargo") "cargo" else tool_bin
+
+        status <- system2(tool_bin, cmd)
+        if (!identical(status, 0L)) {
+          stop("landuse fraction tool failed with exit status ", status, call. = FALSE)
+        }
+        if (!file.exists(chr_output_file)) {
+          stop("Expected output file was not created: ", chr_output_file, call. = FALSE)
+        }
+        chr_output_file
+
+      },
+      pattern = cross(chr_landuse_files, int_landuse_radius),
+      resources = targets::tar_resources(
+        crew = targets::tar_resources_crew(controller = "controller_04")
+      )
+    ),
     ### F05. MTPI (multiscale terrain position index) ####
     targets::tar_target(
       name = df_feat_correct_mtpi,

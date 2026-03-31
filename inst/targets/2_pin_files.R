@@ -143,5 +143,16 @@ list_basefiles <-
     targets::tar_target(
       name = chr_dir_chelsa,
       command = file.path(chr_dir_climate, "Chelsa")
+    ),
+    ## Rust tools ####
+    targets::tar_target(
+      name = tool_bin,
+      command = {
+        if (!file.exists("rust_tools/geotiff_focal_mean/target/release/focal-mean")) {
+          system2("cargo", c("build", "rust_tools/geotiff_focal_mean", "--release"), stdout = TRUE, stderr = TRUE)
+        }
+        "rust_tools/geotiff_focal_mean/target/release/focal-mean"
+      },
+      format = "file"
     )
   )
