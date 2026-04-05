@@ -113,6 +113,24 @@ list_basefiles <-
           full.names = TRUE
         )
       }
+    ),
+    targets::tar_target(
+      name = chr_era5_blh_files,          # Boundary Layer Height (daily)
+      command = sort(list.files(
+        file.path(chr_dir_climate, "ERA5_BLH"), 
+        pattern = "\\.nc$", 
+        full.names = TRUE
+      )),
+      format = "file"
+    ),
+    targets::tar_target(
+      name = chr_era5_files,              # ERA5_Land (daily)
+      command = sort(list.files(
+        file.path(chr_dir_climate, "ERA5_Land"), 
+        pattern = "\\.nc$", 
+        full.names = TRUE
+      )),
+      format = "file"
     )
   )
 
@@ -124,7 +142,10 @@ list_basefiles <-
 ### DAG 상에서 최종 객체와 직접적으로 이어지지 않는 target 체크
 #### chr_asos_file, chr_asos_site_file, chr_landuse_files
 
+## 2026.04.05
 
+### 일간 변수 추가
+#### chr_era5_blh_files, chr_era5_files
 
 
 
