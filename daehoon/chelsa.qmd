@@ -34,7 +34,7 @@ inv <- chelsaInventory()
 unique(inv$dataset)
 
 # chelsa-daily만 필터
-inv_daily <- subset(inv, dataset == "chelsa_daily" &  year >= 2018 &  year <= 2024)
+inv_daily <- subset(inv, dataset == "chelsa_daily" &  year >= 2010 &  year <= 2025)
 inv_daily
 
 
@@ -53,59 +53,37 @@ aggregate(
 
 ```
 
-Total Cloud Cover Percentage(`clt`)	percent	
-Total cloud area fraction (reported as a percentage) for the whole atmospheric column as seen from the surface or the top of the atmosphere. Includes both large-scale and convective cloud.
+Total Cloud Cover Percentage(`clt`) percent Total cloud area fraction (reported as a percentage) for the whole atmospheric column as seen from the surface or the top of the atmosphere. Includes both large-scale and convective cloud.
 
-Near-Surface Relative Humidity(`hurs`) percent
-The relative humidity with respect to liquid water for T> 0 C and with respect to ice for T
+Near-Surface Relative Humidity(`hurs`) percent The relative humidity with respect to liquid water for T\> 0 C and with respect to ice for T
 
-Precipitation(`pr`)	kg m-2 day-1	
+Precipitation(`pr`) kg m-2 day-1\
 includes both liquid and solid phases
 
-Surface Air Pressure(`ps`)	hPa	
-surface pressure (not mean sea-level pressure)
+Surface Air Pressure(`ps`) hPa surface pressure (not mean sea-level pressure)
 
-Surface Downwelling Shortwave Flux in Air(`rsds`)	W m-2	
+Surface Downwelling Shortwave Flux in Air(`rsds`) W m-2\
 Surface solar irradiance for UV calculations.
 
-Near-Surface Wind Speed(`sfcWind`)	m s-1	
+Near-Surface Wind Speed(`sfcWind`) m s-1\
 near-surface (usually 10 meters) wind speed.
 
-Daily Mean Near-Surface Air Temperature(`tas`)	K	
+Daily Mean Near-Surface Air Temperature(`tas`) K\
 near-surface (usually 2 meter) air temperature
 
-Daily Maximum Near-Surface Air Temperature(tasmax)	K	
+Daily Maximum Near-Surface Air Temperature(tasmax) K\
 maximum near-surface (usually 2 meter) air temperature
 
-Daily Minimum Near-Surface Air Temperature(tasmin)	K	
+Daily Minimum Near-Surface Air Temperature(tasmin) K\
 minimum near-surface (usually 2 meter) air temperature
 
-Air Temperature Lapse Rate(tz)	K m-1	
+Air Temperature Lapse Rate(tz) K m-1\
 Rate of change in air temperature with altitude calculated over centennial period
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
 
 ```{r}
 inv_2020 <- subset(inv, dataset == "chelsa_daily" &  year == 2020)
 inv_2020
 ```
-
 
 ```{r}
 pr_1 <- getChelsa("pr", dataset="CHELSA-daily",
@@ -203,28 +181,3 @@ results <- future_lapply(1:12, function(m) {
 # 결과 출력
 cat(unlist(results), sep = "\n")
 ```
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-

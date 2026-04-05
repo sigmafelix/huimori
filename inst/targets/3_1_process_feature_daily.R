@@ -122,19 +122,20 @@ list_process_site_daily <-
 
 
         # Unique space-time by years
-        sites_fullrange <- sites_cfd %>%
-          dplyr::group_by(TMSID, TMSID2) %>%
-          dplyr::filter(!is.na(date_start) & !is.na(date_end)) %>%
-          tidyr::nest() %>%
+        sites_fullrange <- sites_cfd |>
+          dplyr::group_by(TMSID, TMSID2) |>
+          dplyr::filter(!is.na(date_start) & !is.na(date_end)) |>
+          tidyr::nest() |>
           dplyr::mutate(
             year_all = purrr::map(data, function(df) {
               # compute year_start, year_end from df
               ystart <- lubridate::year(df$date_start)
               yend   <- lubridate::year(df$date_end)
               data.frame(year = seq(ystart, yend))
-            })
-          ) %>%
-          tidyr::unnest(c(year_all, data)) %>%
+            }),
+            data = purrr::map(data, \(df) dplyr::select(df, -any_of("year")))   ############# 추가 (daehoon)
+          ) |>
+          tidyr::unnest(c(year_all, data)) |>
           dplyr::ungroup()
 
         ##   weight by lengths of each location for annual mean
@@ -163,6 +164,19 @@ list_process_site_daily <-
           dplyr::filter(year == int_years_spatial)
       },
       pattern = map(int_years_spatial),
+      iteration = "list"
+    ),
+    # sf_monitors_correct branched by month (subset by month)                  ############# 추가 (daehoon)
+    targets::tar_target(
+      name = sf_monitors_correct_month,
+      command = {
+        # chr_months_spatial에서 연도와 월을 추출하여 필터링
+        target_yr <- as.integer(substr(chr_months_spatial, 1, 4))
+        
+        sf_monitors_correct |>
+          dplyr::filter(year == target_yr)
+      },
+      pattern = map(chr_months_spatial),
       iteration = "list"
     ),
     # full spacetime data frame for unique TMSID-date combinations
@@ -739,38 +753,37 @@ list_process_feature_daily <-
       },
       pattern = map(sf_monitors_correct_yr)
     ),
-    ### F08. Aerosol Optical Depth (daily) ####
-    targets::tar_target(
-      name = chr_aod_date_seq,
-      command = {
-        seq(
-          from = as.Date("2010-01-01"),
-          to = as.Date("2023-12-31"),
-          by = "30 days"
-        )
-      }
-    ),
-    targets::tar_target(
-      name = chr_aod_date_chunks,
-      command = {
-        start_dates <- chr_aod_date_seq
-        end_dates <- c(
-          chr_aod_date_seq[-1] - 1,
-          as.Date("2023-12-31")
-        )
-        df_dates <-
-          data.frame(
-            start_date = start_dates,
-            end_date = end_dates
-          ) |>
-          dplyr::mutate(
-            chunk_id = dplyr::row_number()
-          ) |>
-          dplyr::group_by(chunk_id) |>
-          targets::tar_group()
-      },
-      iteration = "group"
-    ),
+    # targets::tar_target(
+    #   name = chr_aod_date_seq,
+    #   command = {
+    #     seq(
+    #       from = as.Date("2010-01-01"),
+    #       to = as.Date("2023-12-31"),
+    #       by = "30 days"
+    #     )
+    #   }
+    # ),
+    # targets::tar_target(
+    #   name = chr_aod_date_chunks,
+    #   command = {
+    #     start_dates <- chr_aod_date_seq
+    #     end_dates <- c(
+    #       chr_aod_date_seq[-1] - 1,
+    #       as.Date("2023-12-31")
+    #     )
+    #     df_dates <-
+    #       data.frame(
+    #         start_date = start_dates,
+    #         end_date = end_dates
+    #       ) |>
+    #       dplyr::mutate(
+    #         chunk_id = dplyr::row_number()
+    #       ) |>
+    #       dplyr::group_by(chunk_id) |>
+    #       targets::tar_group()
+    #   },
+    #   iteration = "group"
+    # ),
     # targets::tar_target(
     #   name = df_feat_correct_aod,
     #   command = {
@@ -782,13 +795,11 @@ list_process_feature_daily <-
     #       ),
     #       "%Y%j",
     #     )
-
     #     aod_files <- file.path(
     #       chr_dir_aod,
     #       paste0("MCD19A2_Daily_Composite_", date_pattern, ".tif")
     #     )
     #     aod_files <- aod_files[file.exists(aod_files)]
-
     #     result <- purrr::map_df(
     #       aod_files,
     #       function(file) {
@@ -807,7 +818,6 @@ list_process_feature_daily <-
     #         )
     #       }
     #     )
-
     #     result |>
     #       dplyr::group_by(TMSID, TMSID2) |>
     #       dplyr::mutate(year = lubridate::year(date)) |>
@@ -875,11 +885,11 @@ list_process_feature_daily <-
         if (!dir.exists(aod_yr_dir)) {
           dir.create(aod_yr_dir, recursive = TRUE)
         }
-        terra::writeRaster(
-          aod_yr,
-          filename = aod_yr_file,
-          overwrite = TRUE
-        )
+        # terra::writeRaster(
+        #   aod_yr,
+        #   filename = aod_yr_file,
+        #   overwrite = TRUE
+        # )
         aod_yr_file
       },
       pattern = map(int_aod_year_chunks),
@@ -916,24 +926,213 @@ list_process_feature_daily <-
       pattern = map(sf_monitors_correct_yr, int_aod_year_chunks, rast_year_aod),
       iteration = "list"
     ),
+    ### F08. Aerosol Optical Depth (daily) ####                                ############# 추가 (daehoon) 
+    targets::tar_target(
+      name = df_feat_correct_aod_daily,
+      command = {
+        mon_start <- as.Date(paste0(chr_months_spatial, "-01"))
+        mon_end   <- lubridate::rollback(mon_start + months(1))
+        date_seq  <- seq(mon_start, mon_end, by = "day")
+        date_pattern <- strftime(date_seq, "%Y%j")
+
+        aod_files <- file.path(
+          chr_dir_aod,
+          paste0("MCD19A2_Daily_Composite_", date_pattern, ".tif")
+        )
+        
+        valid_files <- aod_files[file.exists(aod_files)]
+        if (length(valid_files) == 0) return(data.frame())
+        
+        # 월 내부의 일별(Daily) 추출 루프
+        purrr::map_df(valid_files, function(file) {
+          date_str <- stringr::str_extract(basename(file), "\\d{7}")
+          current_date <- as.Date(date_str, format = "%Y%j")
+          
+          # 해당 날짜에 실제 운영 중인 측정소만 필터링
+          current_sf <- sf_monitors_correct |> 
+            dplyr::filter(
+              as.Date(date_start) <= current_date & 
+                as.Date(date_end) >= current_date
+            )
+          
+          if (nrow(current_sf) == 0) return(NULL)
+          
+          # Raster 로드 및 좌표계 일치
+          aod_ras <- terra::rast(file)
+          ras_crs <- terra::crs(aod_ras)
+
+          current_sf_buff <- current_sf |> 
+            sf::st_transform(ras_crs) |> 
+            sf::st_buffer(dist = 100)
+
+          extracted <- exactextractr::exact_extract(
+            x = aod_ras,
+            y = current_sf_buff,
+            fun = "mean",
+            force_df = TRUE,
+            progress = FALSE
+          )
+
+          data.frame(
+            TMSID  = current_sf$TMSID,
+            TMSID2 = current_sf$TMSID2,
+            date   = current_date,
+            aod    = ifelse(is.nan(extracted$mean), NA, extracted$mean)
+          )
+        })
+      },
+      # chr_months_spatial (108개)를 따라 branch 생성
+      pattern = map(chr_months_spatial),
+      iteration = "list",
+      resources = targets::tar_resources(
+        crew = targets::tar_resources_crew(controller = "controller_15")
+      )
+    ),
     ### F09. CHELSA ####
     
-    ### F10. BLH (ERA5) ####
+    
+    
+    ### F10-1. ERA5-Land (daily) ####
     targets::tar_target(
-      name = df_feat_correct_blh,
+      name = df_feat_correct_era5_land_daily,
       command = {
-        # Placeholder for BLH extraction logic
-        # This would involve reading ERA5 data, extracting BLH values at monitor locations, and processing them as needed.
-        # The actual implementation would depend on the format of the ERA5 data and the desired temporal resolution (e.g., daily, monthly, annual).
-        # For now, we can return an empty data frame with the expected structure.
-        data.frame(
-          TMSID = character(),
-          TMSID2 = character(),
-          year = integer(),
-          blh = numeric()
-        )
+
+        curr_yr  <- substr(chr_months_spatial, 1, 4)
+        curr_mon <- substr(chr_months_spatial, 6, 7)
+        zip_nc_path <- file.path(chr_dir_era5_land, 
+                                 paste0("ERA5_Land_", curr_yr, "_", curr_mon, ".nc"))
+        if (!file.exists(zip_nc_path)) return(data.frame())
+        temp_sub <- file.path(tempdir(), paste0("era5_target_", curr_yr, curr_mon, "_", sample(1e5, 1)))
+        dir.create(temp_sub, showWarnings = FALSE, recursive = TRUE)
+        
+        tryCatch({
+          unzip(zip_nc_path, files = "data_0.nc", exdir = temp_sub)
+          real_nc <- file.path(temp_sub, "data_0.nc")
+          if (!file.exists(real_nc)) return(data.frame())
+          r_full <- terra::rast(real_nc)
+          n_lyr_per_var <- terra::nlyr(r_full) / 6
+          start_utc <- as.POSIXct(paste0(chr_months_spatial, "-01 00:00:00"), tz = "UTC")
+          time_seq_utc <- seq(from = start_utc, by = "hour", length.out = n_lyr_per_var)
+
+          date_kst <- as.Date(time_seq_utc, tz = "Asia/Seoul")
+          unique_dates <- sort(unique(date_kst))
+          v_mean <- c("t2m", "u10", "v10", "sp")    # 평균 처리할 변수들 (기온, 풍속, 표면기압)
+          v_sum  <- c("ssr", "tp")                  # 누적 집계할 변수들 (일사량, 강수량)
+          
+          daily_list <- list()
+          for (v in c(v_mean, v_sum)) {
+            idx <- grep(v, names(r_full))
+            if (length(idx) == 0) next
+            agg_fun <- if (v %in% v_mean) "mean" else "sum"
+            daily_list[[v]] <- terra::tapp(r_full[[idx]], 
+                                           index = date_kst[1:length(idx)], 
+                                           fun = agg_fun, 
+                                           na.rm = TRUE)
+          }
+
+          current_sf <- sf_monitors_correct |> 
+            dplyr::filter(year == as.integer(curr_yr))
+          
+          s_buff <- current_sf |> 
+            sf::st_transform(terra::crs(r_full)) |> 
+            sf::st_buffer(dist = 100)
+
+          res_list <- lapply(names(daily_list), function(v_name) {
+            ext <- exactextractr::exact_extract(daily_list[[v_name]], s_buff, 
+                                                fun = "mean", force_df = TRUE, progress = FALSE)
+            
+            ext |>
+              dplyr::mutate(TMSID = current_sf$TMSID, TMSID2 = current_sf$TMSID2) |>
+              tidyr::pivot_longer(cols = starts_with("mean"), names_to = "discard", values_to = v_name) |>
+              dplyr::group_by(TMSID, TMSID2) |>
+              dplyr::mutate(date = unique_dates[1:dplyr::n()]) |>
+              dplyr::ungroup() |>
+              dplyr::select(TMSID, TMSID2, date, !!sym(v_name))
+          })
+
+          final_mon <- Reduce(function(x, y) dplyr::left_join(x, y, by = c("TMSID", "TMSID2", "date")), res_list) |>
+            dplyr::mutate(
+              across(any_of("t2m"), ~ .x - 273.15) # Kelvin to Celsius
+            ) |>
+            dplyr::filter(!is.na(date))
+          
+          return(final_mon)
+          
+        }, error = function(e) {
+          message(paste("Error in branch", chr_months_spatial, ":", e$message))
+          return(data.frame())
+        }, finally = {
+          unlink(temp_sub, recursive = TRUE)
+        })
       },
-      pattern = map(sf_monitors_correct_yr)
+      pattern = map(chr_months_spatial),
+      iteration = "list",
+      resources = targets::tar_resources(
+        crew = targets::tar_resources_crew(controller = "controller_15")
+      )
+    ),
+    
+    
+    ### F10-2. BLH (daily) ####
+    targets::tar_target(
+      name = df_feat_correct_era5_blh_daily,
+      command = {
+
+        curr_yr  <- substr(chr_months_spatial, 1, 4)
+        curr_mon <- substr(chr_months_spatial, 6, 7)
+        nc_path  <- file.path(chr_dir_era5_blh, 
+                              paste0("ERA5_BLH_", curr_yr, "_", curr_mon, ".nc"))
+
+        if (!file.exists(nc_path)) return(data.frame())
+        
+        tryCatch({
+
+          r_full <- terra::rast(nc_path)
+
+          start_utc <- as.POSIXct(paste0(chr_months_spatial, "-01 00:00:00"), tz = "UTC")
+          time_seq_utc <- seq(from = start_utc, by = "hour", length.out = terra::nlyr(r_full))
+          
+          date_kst <- as.Date(time_seq_utc, tz = "Asia/Seoul")
+          unique_dates <- sort(unique(date_kst))
+
+          r_daily <- terra::tapp(r_full, 
+                                 index = date_kst[1:terra::nlyr(r_full)], 
+                                 fun = "mean", 
+                                 na.rm = TRUE)
+
+          current_sf <- sf_monitors_correct |> 
+            dplyr::filter(year == as.integer(curr_yr))
+          
+          s_buff <- current_sf |> 
+            sf::st_transform(terra::crs(r_full)) |> 
+            sf::st_buffer(dist = 100)
+          
+
+          ext <- exactextractr::exact_extract(r_daily, s_buff, 
+                                              fun = "mean", force_df = TRUE, progress = FALSE)
+          
+          final_mon <- ext |>
+            dplyr::mutate(TMSID = current_sf$TMSID, TMSID2 = current_sf$TMSID2) |>
+            tidyr::pivot_longer(cols = starts_with("mean"), names_to = "discard", values_to = "blh") |>
+            dplyr::group_by(TMSID, TMSID2) |>
+            dplyr::mutate(date = unique_dates[1:dplyr::n()]) |>
+            dplyr::ungroup() |>
+            dplyr::select(TMSID, TMSID2, date, blh) |>
+            dplyr::filter(!is.na(date))
+          
+          return(final_mon)
+          
+        }, error = function(e) {
+          message(paste("Error in BLH branch", chr_months_spatial, ":", e$message))
+          return(data.frame())
+        })
+      },
+
+      pattern = map(chr_months_spatial),
+      iteration = "list",
+      resources = targets::tar_resources(
+        crew = targets::tar_resources_crew(controller = "controller_15")
+      )
     ),
 
     ### F11. Merge features ####

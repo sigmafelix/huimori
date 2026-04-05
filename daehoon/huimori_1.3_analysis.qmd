@@ -410,7 +410,6 @@ df_feat_correct_emittors <- gw_emittors(
   dplyr::select(n_emittors_watershed)
 ```
 
-
 ### 변수들 모두 합치기: `df_feat_correct_merged`
 
 ```{r}
@@ -447,7 +446,6 @@ df_feat_correct_merged <- purrr::reduce(
 # 최종 결과 확인
 print(df_feat_correct_merged)
 ```
-
 
 ## 해상도 통일 및 아웃라이어 제거: `dt_daily`, `sf_daily`
 
@@ -539,7 +537,6 @@ sf_daily <- dt_daily %>% st_as_sf()
 ```{r}
 dt_daily
 ```
-
 
 # ERA5-Land
 
@@ -715,8 +712,6 @@ dt_daily_era5 <- merge(
 )
 ```
 
-
-
 trees = (n_estimators): 학습 과정에서 생성된 decision tree의 총 개수
 
 tree_depth = (max_depth): 개별 나무가 아래로 얼마나 깊게 내려갈지를 결정하는 최대 층수.
@@ -726,7 +721,6 @@ learn_rate = (eta): 각 단계에서 새로 생성된 나무의 기여도를 얼
 mtry = (colsample_bytree): 각 노드를 분할할 때 무작위로 후보군에 포함시킬 독립 변수의 개수.
 
 min_n = (min_child_weight): 노드가 더 분할되기 위해 해당 노드에 포함되어야 하는 최소 관측치 수.
-
 
 ```{r}
 df_model_full <- st_as_sf(dt_daily_era5)
@@ -755,7 +749,6 @@ df_model_refined <- df_model_full %>%
 df_train_full <- df_model_refined %>% filter(year < 2023)
 df_test_full  <- df_model_refined %>% filter(year == 2023)
 ```
-
 
 ```{r}
 Sys.setenv(R_FUTURE_GLOBALS_MAXSIZE = "100000000000") 
@@ -935,8 +928,6 @@ dt_daily_era5 <- merge(
 )
 ```
 
-
-
 trees = (n_estimators): 학습 과정에서 생성된 decision tree의 총 개수
 
 tree_depth = (max_depth): 개별 나무가 아래로 얼마나 깊게 내려갈지를 결정하는 최대 층수.
@@ -946,7 +937,6 @@ learn_rate = (eta): 각 단계에서 새로 생성된 나무의 기여도를 얼
 mtry = (colsample_bytree): 각 노드를 분할할 때 무작위로 후보군에 포함시킬 독립 변수의 개수.
 
 min_n = (min_child_weight): 노드가 더 분할되기 위해 해당 노드에 포함되어야 하는 최소 관측치 수.
-
 
 ```{r}
 df_model_full <- st_as_sf(dt_daily_era5)
@@ -975,7 +965,6 @@ df_model_refined <- df_model_full %>%
 df_train_full <- df_model_refined %>% filter(year < 2023)
 df_test_full  <- df_model_refined %>% filter(year == 2023)
 ```
-
 
 ```{r}
 Sys.setenv(R_FUTURE_GLOBALS_MAXSIZE = "100000000000") 
@@ -1155,8 +1144,6 @@ dt_daily_era5 <- merge(
 )
 ```
 
-
-
 trees = (n_estimators): 학습 과정에서 생성된 decision tree의 총 개수
 
 tree_depth = (max_depth): 개별 나무가 아래로 얼마나 깊게 내려갈지를 결정하는 최대 층수.
@@ -1166,7 +1153,6 @@ learn_rate = (eta): 각 단계에서 새로 생성된 나무의 기여도를 얼
 mtry = (colsample_bytree): 각 노드를 분할할 때 무작위로 후보군에 포함시킬 독립 변수의 개수.
 
 min_n = (min_child_weight): 노드가 더 분할되기 위해 해당 노드에 포함되어야 하는 최소 관측치 수.
-
 
 ```{r}
 df_model_full <- st_as_sf(dt_daily_era5)
@@ -1195,7 +1181,6 @@ df_model_refined <- df_model_full %>%
 df_train_full <- df_model_refined %>% filter(year < 2023)
 df_test_full  <- df_model_refined %>% filter(year == 2023)
 ```
-
 
 ```{r}
 Sys.setenv(R_FUTURE_GLOBALS_MAXSIZE = "100000000000") 
@@ -1355,8 +1340,6 @@ write.csv(summary_pm25,
 ### pr: Precipitation (includes both liquid and solid phases): (kg m-2 day-1)
 ```
 
-
-
 ```{r}
 chr_dir_climate <- "/mnt/hdd001/huimori"
 chr_CHELSA_files <- list.files(file.path(chr_dir_climate, "Chelsa"), pattern = "\\.nc$", full.names = TRUE)
@@ -1428,7 +1411,6 @@ gc()
 message(">>> CHELSA SDS 구축 완료.")
 lapply(ras_chelsa, function(x) terra::summary(x[[1:3]]))
 ```
-
 
 ## 버퍼 추출(1000m)과 XGBoost
 
@@ -1508,7 +1490,6 @@ df_model_refined <- df_model_full %>%
 df_train_full <- df_model_refined %>% filter(year < 2023)
 df_test_full  <- df_model_refined %>% filter(year == 2023)
 ```
-
 
 ```{r}
 Sys.setenv(R_FUTURE_GLOBALS_MAXSIZE = "100000000000") 
@@ -1643,7 +1624,6 @@ write.csv(summary_pm25,
           row.names = FALSE)
 ```
 
-
 ## 버퍼 추출(100m)과 XGBoost
 
 ```{r}
@@ -1722,7 +1702,6 @@ df_model_refined <- df_model_full %>%
 df_train_full <- df_model_refined %>% filter(year < 2023)
 df_test_full  <- df_model_refined %>% filter(year == 2023)
 ```
-
 
 ```{r}
 Sys.setenv(R_FUTURE_GLOBALS_MAXSIZE = "100000000000") 
@@ -1936,7 +1915,6 @@ df_train_full <- df_model_refined %>% filter(year < 2023)
 df_test_full  <- df_model_refined %>% filter(year == 2023)
 ```
 
-
 ```{r}
 Sys.setenv(R_FUTURE_GLOBALS_MAXSIZE = "100000000000") 
 options(future.globals.maxSize = 100 * 1024^3)
@@ -2069,17 +2047,3 @@ write.csv(summary_pm25,
           file = file.path(target_dir, "summary_performance_era5_pm25_1000m.csv"), 
           row.names = FALSE)
 ```
-
-
-
-
-
-
-
-
-
-
-
-
-
-
