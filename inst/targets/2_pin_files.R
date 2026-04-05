@@ -1,9 +1,11 @@
 list_basefiles <-
   list(
+    ## B01. Monitor table ####
     targets::tar_target(
       name = chr_monitors_file,
       command = file.path(chr_dir_git, "data/sites", "sites_history_cleaning_20250311.xlsx")
     ),
+    ## B02. Measurement data ####
     targets::tar_target(
       name = chr_measurement_dir,
       # command = file.path("/home/felix", "Documents")
@@ -14,24 +16,31 @@ list_basefiles <-
       command = file.path(chr_measurement_dir, "sites_airkorea_2010_2023_spt_yd.parquet"),
       format = "file"
     ),
+    ## B03. Landuse data ####
     targets::tar_target(
-      name = chr_landuse_file,
+      name = chr_landuse_files,
       command = {
         glc_dir <- file.path(chr_dir_data, "landuse", "glc_fcs30d")
-        list.files(glc_dir, pattern = "tif$", full.names = TRUE)
+        yrs <- unlist(int_years_spatial)
+        yrs <- yrs - 1L
+        yrs_pattern <- paste0(yrs, collapse = "|")
+        list.files(glc_dir, pattern = paste0("(", yrs_pattern, ")", "\\.tif$"), full.names = TRUE)
       },
       iteration = "list"
     ),
+    ## B04. DEM data ####
     targets::tar_target(
       name = chr_dem_file,
       command = file.path(chr_dir_data, "elevation", "kngii_2022_merged_res30d.tif"),
       format = "file"
     ),
+    ## B05. DSM data ####
     targets::tar_target(
       name = chr_dsm_file,
       command = file.path(chr_dir_data, "elevation", "copernicus_korea_30m.tif"),
       format = "file"
     ),
+    ## B06. Road network data (node-link data from KTDB) ####
     targets::tar_target(
       name = chr_road_files,
       command =
@@ -42,6 +51,7 @@ list_basefiles <-
           full.names = TRUE
         )
     ),
+    ## B07. ASOS weather data ####
     targets::tar_target(
       name = chr_asos_file,
       command = file.path(chr_dir_data, "weather", "data", "asos_2010_2023.parquet")
@@ -50,6 +60,7 @@ list_basefiles <-
       name = chr_asos_site_file,
       command = file.path(chr_dir_data, "weather", "data", "asos_sites.xlsx")
     ),
+    ## B08. Boundary Data ####
     targets::tar_target(
       name = sf_korea_all,
       command = {
@@ -62,12 +73,14 @@ list_basefiles <-
         sf::st_transform("EPSG:5179")
       }
     ),
+    ## B09. Watershed ####
     targets::tar_target(
       name = chr_korea_watershed,
       command = {
         file.path(chr_dir_data, "watersheds", "data", "watershed-korea.gpkg")
       }
     ),
+    ## B10. MTPI (multiscale terrain position index) ####
     targets::tar_target(
       name = chr_mtpi_file,
       command = file.path(chr_dir_data, "elevation", "kngii_90m_mtpi.tif")
@@ -83,70 +96,52 @@ list_basefiles <-
       },
       format = "file"
     ),
+    ## B10-1. Preprocessed landuse fraction files ####
     targets::tar_target(
       name = chr_landuse_freq_file,
       command = {
         # 1km mask
         year <- stringi::stri_extract_first_regex(
-          chr_landuse_file, pattern = "20[0-2][0-9]"
+          chr_landuse_files, pattern = "20[0-2][0-9]"
         )
         year <- as.integer(year)
         year_file_name <- sprintf("glc_freq_%d.tif", year)
         file.path(chr_dir_data, "landuse", year_file_name)
       },
       iteration = "list",
-      pattern = map(chr_landuse_file),
+      pattern = map(chr_landuse_files),
       resources = targets::tar_resources(
         crew = targets::tar_resources_crew(controller = "controller_01")
-      )
+      ),
+      cue = tar_cue(mode = "never")
     ),
+    ## B11. Emission locations ####
     targets::tar_target(
       name = chr_file_emission_locs,
       command = file.path(chr_dir_data, "emission", "data", "emission_location.gpkg")
     ),
     targets::tar_target(
-      name = chr_landuse_files,
+      name = chr_dir_aod,
       command = {
-        list.files(
-          file.path(chr_dir_data, "landuse", "glc_fcs30d"),
-          pattern = ".tif$",
-          full.names = TRUE
-        )
+        file.path(chr_dir_data, "airquality", "aod")
       }
     ),
+    ## B12. ERA5 ####
     targets::tar_target(
-      name = chr_era5_blh_files,          # Boundary Layer Height (daily)
-      command = sort(list.files(
-        file.path(chr_dir_climate, "ERA5_BLH"), 
-        pattern = "\\.nc$", 
-        full.names = TRUE
-      )),
-      format = "file"
+      name = chr_dir_climate,
+      command = file.path(chr_dir_data, "climate")
     ),
     targets::tar_target(
-      name = chr_era5_files,              # ERA5_Land (daily)
-      command = sort(list.files(
-        file.path(chr_dir_climate, "ERA5_Land"), 
-        pattern = "\\.nc$", 
-        full.names = TRUE
-      )),
-      format = "file"
+      name = chr_dir_era5_land,
+      command = file.path(chr_dir_climate, "ERA5_Land")
+    ),
+    targets::tar_target(
+      name = chr_dir_era5_blh,
+      command = file.path(chr_dir_climate, "ERA5_BLH")
+    ),
+    ## B13. CHELSA ####
+    targets::tar_target(
+      name = chr_dir_chelsa,
+      command = file.path(chr_dir_climate, "Chelsa")
     )
   )
-
-
-# ----------------------------------------------------------------
-# 변경 log 기록(dhnyu)
-## 2026.01.31
-
-### DAG 상에서 최종 객체와 직접적으로 이어지지 않는 target 체크
-#### chr_asos_file, chr_asos_site_file, chr_landuse_files
-
-## 2026.04.05
-
-### 일간 변수 추가
-#### chr_era5_blh_files, chr_era5_files
-
-
-
-

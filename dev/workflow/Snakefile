@@ -16,33 +16,33 @@ rule all:
 # Preprocess rasters
 # ---------------------------
 
-rule preprocess_landuse:
-    """
-    Produce one landuse frequency raster per year.
-    NOTE: scripts/preprocess_landuse.py should use snakemake.wildcards.year
-          (or snakemake.params.year) to decide which year to process.
-    """
-    input:
-        landuse_files=os.path.join(config["data_dir"], config["landuse_dir"], "lc_glc_fcs30d_30m_{year}.tif")
-        # landuse_files=lambda wc: [
-        #     os.path.join(config["data_dir"], config["landuse_dir"], f)
-        #     for f in os.listdir(os.path.join(config["data_dir"], config["landuse_dir"]))
-        #     if f.endswith(".tif")
-        # ]
-    output:
-        freq_raster=os.path.join(config["output_dir"], "landuse_freq_{year}.tif")
-    params:
-        year=lambda wc: wc.year
-    shell:
-        """
-        ../../rust_tools/geotiff_focal_mean/target/release/focal-mean \
-            --input {input.landuse_files} \
-            --output {output.freq_raster} \
-            --radius 67 --radius-in-cells \
-            --compression DEFLATE --cog \
-            --tile-size 512 --threads 22 \
-            --verbose --chunksize 2048
-        """
+# rule preprocess_landuse:
+#     """
+#     Produce one landuse frequency raster per year.
+#     NOTE: scripts/preprocess_landuse.py should use snakemake.wildcards.year
+#           (or snakemake.params.year) to decide which year to process.
+#     """
+#     input:
+#         landuse_files=os.path.join(config["data_dir"], config["landuse_dir"], "lc_glc_fcs30d_30m_{year}.tif")
+#         # landuse_files=lambda wc: [
+#         #     os.path.join(config["data_dir"], config["landuse_dir"], f)
+#         #     for f in os.listdir(os.path.join(config["data_dir"], config["landuse_dir"]))
+#         #     if f.endswith(".tif")
+#         # ]
+#     output:
+#         freq_raster=os.path.join(config["output_dir"], "landuse_freq_{year}.tif")
+#     params:
+#         year=lambda wc: wc.year
+#     shell:
+#         """
+#         ../../rust_tools/geotiff_focal_mean/target/release/focal-mean \
+#             --input {input.landuse_files} \
+#             --output {output.freq_raster} \
+#             --radius 67 --radius-in-cells \
+#             --compression DEFLATE --cog \
+#             --tile-size 512 --threads 22 \
+#             --verbose --chunksize 2048
+#         """
 
 
 rule preprocess_mtpi:
@@ -114,7 +114,7 @@ rule calc_features_grid:
         mtpi_1km=os.path.join(config["output_dir"], "mtpi_1km.tif"),
         emissions=os.path.join(config["data_dir"], config["files"]["emissions"]),
         watersheds=os.path.join(config["data_dir"], config["files"]["watersheds"]),
-        landuse_freq=os.path.join(config["output_dir"], "landuse_freq_{year}.tif")
+        # landuse_freq=os.path.join(config["output_dir"], "landuse_freq_{year}.tif")
     params:
         road_dir=os.path.join(config["data_dir"], config["road_dir"]),
         landuse_dir=config["output_dir"],
