@@ -1,0 +1,431 @@
+---
+title: "huimori_3_landuse_visualization"
+format:
+  html:
+    theme: cosmo
+    toc: true
+    toc-depth: 3
+    toc-location: left
+    code-fold: show
+    code-summary: "코드 보기"
+    code-overflow: wrap
+    number-sections: true
+    smooth-scroll: true
+    embed-resources: true
+    df-print: paged
+    page-layout: full
+editor: visual
+---
+
+```{r}
+library(tidyverse)
+library(sf)
+library(data.table)
+library(terra)
+library(ncdf4)
+library(httr)
+library(exactextractr)
+library(future)
+library(future.apply)
+library(future.mirai)
+library(parallel)
+library(readxl)
+library(arrow)
+library(geodata)
+
+save_dir <- "~/huimori/daehoon/landuse_res"
+if (!dir.exists(save_dir)) dir.create(save_dir, recursive = TRUE)
+```
+
+# 대한민국 경계
+
+## 경계 자료
+
+```{r}
+sf_korea_all <- gadm(
+  country = "KOR", 
+  level = 0, 
+  path = file.path("~", "geodatacache")
+) %>% 
+  st_as_sf() %>% 
+  st_transform("EPSG:5179")
+
+png("~/huimori/korea_map_v1.png", width = 800, height = 800)
+
+plot(sf::st_geometry(sf_korea_all), 
+     main = "Korea Boundary (EPSG:5179)", 
+     col = "lightblue", 
+     border = "darkgrey")
+
+dev.off()
+```
+
+
+## 포인트 샘플링 (10000개)
+
+```{r}
+set.seed(42) # 재현성을 위한 시드 설정
+pts_samples <- st_sample(sf_korea_all, size = 10000, type = "random", exact = TRUE)
+sf_random_pts <- st_sf(
+  ID = 1:10000,
+  geometry = pts_samples
+)
+
+png("~/huimori/random_points.png", width = 800, height = 800)
+plot(st_geometry(sf_korea_all), border = "grey", main = "Random 10,000 Points in Korea")
+plot(st_geometry(sf_random_pts), add = TRUE, pch = 19, cex = 0.1, col = "red")
+dev.off()
+
+sf_pts_buf <- sf_random_pts %>%
+  st_buffer(dist = 1e-6) %>%
+  st_transform(4326) # WGS84
+```
+
+# 새로운 래스터 데이터
+
+```{r}
+# 1. 파일 목록 및 지점 데이터 준비
+base_path <- "/mnt/nerf/preprocessed"
+all_files <- list.files(base_path, pattern = "\\.tif$", full.names = TRUE)
+
+# 첫 번째 파일로 CRS 맞추기
+temp_ref <- rast(all_files[1])
+sf_pts_buf <- sf_random_pts %>%
+  st_transform(crs(temp_ref)) %>%
+  st_buffer(dist = 1e-6)
+rm(temp_ref); gc()
+
+# 2. 파일 하나를 처리하는 메인 루틴
+process_single_file <- function(file_path) {
+  cat(paste0("\n[Step 1] Loading file: ", basename(file_path), "\n"))
+  
+  # 파일명 정보 추출
+  file_name <- basename(file_path)
+  curr_year <- as.numeric(gsub(".*_([0-9]{4})_.*", "\\1", file_name))
+  curr_param <- as.numeric(gsub(".*_([0-9]{4}).tif", "\\1", file_name))
+
+  full_rast <- rast(file_path)
+
+  cat("[Step 2] Splitting into 26 individual rasters...\n")
+  raster_list <- lapply(1:nlyr(full_rast), function(i) full_rast[[i]])
+
+  rm(full_rast); gc()
+  
+  cat("[Step 3] Starting parallel extraction on 26 cores...\n")
+  
+  # 26개 코어에 26개 래스터 분배
+  results <- mclapply(1:length(raster_list), function(l_idx) {
+    library(exactextractr)
+    library(terra)
+
+    target_lyr <- raster_list[[l_idx]]
+
+    ext_val <- exact_extract(
+      target_lyr, 
+      sf_pts_buf, 
+      fun = "mean", 
+      progress = FALSE, 
+      max_cells_in_memory = 2e+09 # 2GB 수준으로 안전하게 설정
+    )
+    
+    return(data.frame(
+      ID = 1:nrow(sf_pts_buf),
+      year = curr_year,
+      layer = l_idx,
+      pixel_value = ext_val,
+      buffer = curr_param,
+      type = "new"
+    ))
+  }, mc.cores = 26, mc.preschedule = TRUE)
+
+  rm(raster_list); gc()
+  
+  return(bind_rows(results))
+}
+
+final_results <- list()
+
+for (f in all_files) {
+  res_df <- process_single_file(f)
+
+  save_path <- file.path(save_dir, paste0("res_", basename(f), ".rds"))
+  saveRDS(res_df, save_path)
+  
+  final_results[[f]] <- res_df
+  cat(paste0("[Done] Saved: ", save_path, "\n"))
+}
+
+# 4. 최종 병합
+df_final <- bind_rows(final_results)
+arrow::write_parquet(df_final, file.path(save_dir, "landuse_extract_mean.parquet"))
+```
+
+# 기존 래스터 데이터
+
+```{r}
+chr_dir_data <- "/mnt/hdd001/Korea"
+chr_landuse_file <- list.files(file.path(chr_dir_data, "landuse", "glc_fcs30d"), pattern = "tif$", full.names = TRUE)
+chr_landuse_freq_file <- file.path(chr_dir_data, "landuse", sprintf("glc_freq_%d.tif", as.integer(stringi::stri_extract_first_regex(chr_landuse_file, "20[0-2][0-9]"))))
+chr_landuse_freq_file <- chr_landuse_freq_file[!grepl("2009", chr_landuse_freq_file)]
+
+buffer_radii <- c(30, 100, 500, 2000)
+pts_utm <- st_transform(sf_random_pts, 5179)
+
+# 각 버퍼별로 리스트 생성
+pts_buffers <- lapply(buffer_radii, function(r) {
+  buf <- st_buffer(pts_utm, dist = r)
+  st_transform(buf, 4326)
+})
+names(pts_buffers) <- as.character(buffer_radii)
+
+plan(mirai_multisession, workers = 13)
+
+final_results <- future_lapply(chr_landuse_freq_file, function(file_path) {
+  
+  # 해당 연도 및 파일명 정보 추출
+  file_name <- basename(file_path)
+  curr_year <- stringi::stri_extract_first_regex(file_name, "20[0-2][0-9]")
+  
+  cat(paste0("\n[Start] Processing: ", file_name, "\n"))
+  
+  # 래스터 로드 및 레이어 이름 설정
+  r <- rast(file_path)
+  class_codes <- c(0, 10, 11, 20, 51, 52, 61, 62, 71, 72, 81, 82, 91, 
+                   120, 130, 140, 150, 181, 182, 183, 186, 187, 190, 200, 210)
+  names(r) <- paste0("C", class_codes)
+
+  # 각 버퍼 규모별 추출 수행
+  year_res_list <- lapply(names(pts_buffers), function(radius) {
+
+    ext <- exact_extract(r, pts_buffers[[radius]], fun = "frac", 
+                         stack_apply = TRUE, progress = FALSE)
+    
+
+    ext %>%
+      mutate(ID = row_number(), buffer = as.numeric(radius)) %>%
+      pivot_longer(cols = starts_with("frac_"), 
+                   names_to = "class", 
+                   values_to = "pixel_value") %>%
+      mutate(
+        year = as.integer(curr_year),
+        type = "frac",
+        class = gsub("frac_C", "", class)
+      ) %>%
+      filter(pixel_value > 0) # 용량 최적화를 위해 0값 제외
+  })
+
+  year_df <- bind_rows(year_res_list)
+
+  mid_save_path <- file.path(save_dir, paste0("res_", file_name, ".rds"))
+  saveRDS(year_df, mid_save_path)
+  
+  cat(paste0("[Saved] Intermediate: ", mid_save_path, "\n"))
+  
+  rm(r, year_res_list); gc() # 메모리 정리
+  return(year_df)
+  
+}, future.seed = TRUE)
+
+
+df_final <- bind_rows(final_results)
+
+arrow::write_parquet(df_final, file.path(save_dir, "landuse_extract_frac.parquet"))
+```
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
