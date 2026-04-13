@@ -531,11 +531,6 @@ list_process_feature <-
     ),
     ### F04. Land use fractions ####
     targets::tar_target(
-      name = int_landuse_radius,
-      command = c(30, 100, 500, 2000),
-      iteration = "list"
-    ),
-    targets::tar_target(
       name = df_feat_correct_landuse,
       command = {
         # landuse_ras <-
@@ -630,8 +625,8 @@ list_process_feature <-
             "--input", chr_landuse_files,
             "--output", chr_output_file,
               "--radius", chr_radius_cells, "--radius-in-cells",
-              "--chunksize", "2048",
-              "--threads", "4",
+              "--chunksize", "6000",
+              "--threads", "28",
               "--compression", "ZSTD",
               "--verbose"
           )
@@ -1393,7 +1388,7 @@ list_process_feature <-
     targets::tar_target(
       name = df_feat_grid_landuse,
       command = {
-        chunk_size <- 2e4L
+        chunk_size <- 1e4L
         n_grid <- nrow(list_pred_calc_grid)
         n_chunk <- ceiling(n_grid / chunk_size)
         pad_m <- int_landuse_radius + 100
@@ -1419,37 +1414,43 @@ list_process_feature <-
               chr_landuse_freq_file,
               win = ext_reproj
             )
+          landuse_ras <- landuse_ras[[-length(names(landuse_ras))]]
 
           list_pred_calc_grid_i[["year"]] <- year_landuse
           init_list[[i]] <-
             chopin::extract_at(
               x = landuse_ras,
               y = list_pred_calc_grid_i,
-              radius = int_landuse_radius,
+              radius = 1e-6,,
               id = c("gid", "year"),
               func = "mean",
               force_df = TRUE
             )
 
-          rm(landuse_ras, list_pred_calc_grid_i)
-          if (i %% 10L == 0L) {
-            gc(FALSE)
-          }
+          # rm(landuse_ras, list_pred_calc_grid_i)
+          # if (i %% 10L == 0L) {
+          #   gc(FALSE)
+          # }
         }
 
         df_extract <- collapse::rowbind(init_list, fill = TRUE)
         cols_landuse <- setdiff(names(df_extract), c("gid", "year"))
+        data_radius <-
+          stringi::stri_extract_first_regex(
+            basename(chr_landuse_freq_file),
+            pattern = "20[0-9]{2,2}"
+          )
 
         df_extract |>
           dplyr::rename_with(
             .cols = dplyr::all_of(cols_landuse),
-            .fn = ~ paste0("landuse_", ., "_", int_landuse_radius)
+            .fn = ~ paste0("landuse_", ., "_", data_radius)
           )
       },
       iteration = "list",
-      pattern = cross(cross(list_pred_calc_grid, chr_landuse_freq_file), int_landuse_radius),
+      pattern = cross(list_pred_calc_grid, chr_landuse_freq_file),
       resources = targets::tar_resources(
-        crew = targets::tar_resources_crew(controller = "controller_40")
+        crew = targets::tar_resources_crew(controller = "controller_20")
       )
     ),
     targets::tar_target(

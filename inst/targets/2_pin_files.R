@@ -98,18 +98,22 @@ list_basefiles <-
     ),
     ## B10-1. Preprocessed landuse fraction files ####
     targets::tar_target(
+      name = int_landuse_radius,
+      command = c(30, 100, 500, 2000),
+      iteration = "list"
+    ),
+    targets::tar_target(
       name = chr_landuse_freq_file,
       command = {
-        # 1km mask
         year <- stringi::stri_extract_first_regex(
           chr_landuse_files, pattern = "20[0-2][0-9]"
         )
         year <- as.integer(year)
-        year_file_name <- sprintf("glc_freq_%d.tif", year)
-        file.path(chr_dir_data, "landuse", year_file_name)
+        year_file_name <- sprintf("landuse_fraction_%d_%04d.tif", year, int_landuse_radius)
+        file.path("/mnt/nerf", "preprocessed", year_file_name)
       },
       iteration = "list",
-      pattern = map(chr_landuse_files),
+      pattern = cross(map(chr_landuse_files), int_landuse_radius),
       resources = targets::tar_resources(
         crew = targets::tar_resources_crew(controller = "controller_01")
       ),

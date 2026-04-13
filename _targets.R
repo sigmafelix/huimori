@@ -8,25 +8,93 @@ library(crew)
 library(sf)
 
 sf::sf_use_s2(FALSE) # Disable S2 geometry library for sf package.
-
 # set controllers
 controller_01 <-
-  crew::crew_controller_local(name = "controller_01", workers = 1)
+  crew::crew_controller_local(
+    name = "controller_01", workers = 1,
+    options_local = crew_options_local(
+      log_directory = "_targets/crew_logs"
+    ),
+    options_metrics = crew_options_metrics(
+      path = "/dev/stdout",
+      seconds_interval = 1
+    ),
+    garbage_collection = TRUE
+  )
 controller_04 <-
-  crew::crew_controller_local(name = "controller_04", workers = 4)
+  crew::crew_controller_local(
+    name = "controller_04", workers = 4,
+    options_local = crew_options_local(
+      log_directory = "_targets/crew_logs"
+    ),
+    options_metrics = crew_options_metrics(
+      path = "/dev/stdout",
+      seconds_interval = 1
+    ),
+    garbage_collection = TRUE
+  )
 controller_08 <-
-  crew::crew_controller_local(name = "controller_08", workers = 8)
+  crew::crew_controller_local(
+    name = "controller_08", workers = 8,
+    options_local = crew_options_local(
+      log_directory = "_targets/crew_logs"
+    ),
+    options_metrics = crew_options_metrics(
+      path = "/dev/stdout",
+      seconds_interval = 1
+    ),
+    garbage_collection = TRUE
+  )
 controller_10 <-
-  crew::crew_controller_local(name = "controller_10", workers = 10)
+  crew::crew_controller_local(
+    name = "controller_10", workers = 10,
+    options_local = crew_options_local(
+      log_directory = "_targets/crew_logs"
+    ),
+    options_metrics = crew_options_metrics(
+      path = "/dev/stdout",
+      seconds_interval = 1
+    ),
+    garbage_collection = TRUE
+  )
 controller_15 <-
-  crew::crew_controller_local(name = "controller_15", workers = 15)
+  crew::crew_controller_local(
+    name = "controller_15", workers = 15,
+    options_local = crew_options_local(
+      log_directory = "_targets/crew_logs"
+    ),
+    options_metrics = crew_options_metrics(
+      path = "/dev/stdout",
+      seconds_interval = 1
+    ),
+    garbage_collection = TRUE
+  )
 controller_20 <-
-  crew::crew_controller_local(name = "controller_20", workers = 20)
+  crew::crew_controller_local(
+    name = "controller_20", workers = 20,
+    options_local = crew_options_local(
+      log_directory = "_targets/crew_logs"
+    ),
+    options_metrics = crew_options_metrics(
+      path = "/dev/stdout",
+      seconds_interval = 1
+    ),
+    garbage_collection = TRUE
+  )
 controller_40 <-
-  crew::crew_controller_local(name = "controller_40", workers = 40)
+  crew::crew_controller_local(
+    name = "controller_40", workers = 40,
+    options_local = crew_options_local(
+      log_directory = "_targets/crew_logs"
+    ),
+    options_metrics = crew_options_metrics(
+      path = "/dev/stdout",
+      seconds_interval = 1
+    ),
+    garbage_collection = TRUE
+  )
 
 
-  
 
 # Set target options:
 targets::tar_option_set(
@@ -44,14 +112,16 @@ targets::tar_option_set(
     controller_04,
     controller_10,
     controller_15,
-    controller_20
+    controller_20,
+    controller_40
   ),
   error = "continue",
   garbage_collection = 3,
   memory = "transient",
   deployment = "worker",
   storage = "worker",
-  retrieval = "worker"
+  retrieval = "worker",
+  workspace_on_error = TRUE
 )
 
 # Run the R scripts in the R/ folder with your custom functions:
