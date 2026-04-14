@@ -1317,42 +1317,63 @@ list_process_feature <-
       }
     ),
     # Grid point features
-   targets::tar_target(
-     name = df_feat_grid_d_road,
-     command = {
-       road <- sf::st_read(chr_road_files, quiet = TRUE)
-       road <- sf::st_transform(road, sf::st_crs(list_pred_calc_grid))
-       road <- road %>%
-         dplyr::filter(!ROAD_TYPE %in% c("002", "004") & ROAD_USE == 0)
-       nearest_idx <- sf::st_nearest_feature(
-         x = list_pred_calc_grid,
-         y = road
-       )
-       road_nearest <- road[nearest_idx, ]
-       dist_road_nearest <-
-         sf::st_distance(
-           x = list_pred_calc_grid,
-           y = road_nearest,
-           by_element = TRUE
-         )
-       
-       sf_grid_dist_att <-
-         list_pred_calc_grid |>
-         dplyr::mutate(
-           d_road = dist_road_nearest
-         ) |>
-         sf::st_drop_geometry()
-       
-       sf_grid_dist_att
-     },
-     iteration = "list",
-     
-     # Cross mapping
-     pattern = cross(list_pred_calc_grid, chr_road_files),
-     resources = targets::tar_resources(
-       crew = targets::tar_resources_crew(controller = "controller_20")
-     )
-   ),
+    #### G01. Distance to road ####
+    targets::tar_target(
+      name = list_road_files,
+      command =  {
+        road <-
+          sf::st_read(
+            dsn = chr_road_files,
+            quiet = TRUE
+          )
+        # remove "ROAD_RANK_" field if present
+        if ("ROAD_RANK_" %in% names(road)) {
+          road <- road |> dplyr::select(-ROAD_RANK_, -LANES_)
+        }
+        # removing the final character "_" from column names if present
+        names(road) <- sub("_$", "", names(road))
+
+        road |>
+          sf::st_transform(sf::st_crs("EPSG:5179")) |>
+          dplyr::filter(!ROAD_TYPE %in% c("002", "004") & ROAD_USE == '0')
+      },
+      pattern = map(chr_road_files),
+      resources = targets::tar_resources(
+        crew = targets::tar_resources_crew(controller = "controller_15")
+      )
+    ),
+    targets::tar_target(
+      name = df_feat_grid_d_road,
+      command = {
+
+        nearest_idx <- sf::st_nearest_feature(
+          x = list_pred_calc_grid,
+          y = list_road_files
+        )
+        road_nearest <- list_road_files[nearest_idx, ]
+        dist_road_nearest <-
+          sf::st_distance(
+            x = list_pred_calc_grid,
+            y = road_nearest,
+            by_element = TRUE
+          )
+
+        sf_grid_dist_att <-
+          list_pred_calc_grid |>
+          dplyr::mutate(
+            d_road = dist_road_nearest
+          ) |>
+          sf::st_drop_geometry()
+
+        sf_grid_dist_att
+      },
+      iteration = "list",
+      # Cross mapping
+      pattern = cross(list_pred_calc_grid, list_road_files),
+      resources = targets::tar_resources(
+        crew = targets::tar_resources_crew(controller = "controller_20")
+      )
+    ),
     targets::tar_target(
       name = df_feat_grid_dsm,
       command = {

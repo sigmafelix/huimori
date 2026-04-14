@@ -43,13 +43,18 @@ list_basefiles <-
     ## B06. Road network data (node-link data from KTDB) ####
     targets::tar_target(
       name = chr_road_files,
-      command =
-        list.files(
-          file.path(chr_dir_data, "transportation", "nodelink", "data"),
-          pattern = "MOCT_LINK.shp$",
-          recursive = TRUE,
-          full.names = TRUE
+      command = {
+        yrs <- unlist(int_years_spatial)
+        yrs <- yrs - 1L
+        yrs_pattern <- paste0(yrs, collapse = "|")
+
+        paste0(
+          file.path(chr_dir_data, "transportation", "nodelink", "data/"),
+          int_years_spatial - 1L, "_NODELINK/MOCT_LINK.shp"
         )
+      },
+      pattern = map(int_years_spatial),
+      iteration = "list"
     ),
     ## B07. ASOS weather data ####
     targets::tar_target(
