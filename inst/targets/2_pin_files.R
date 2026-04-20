@@ -114,11 +114,16 @@ list_basefiles <-
           chr_landuse_files, pattern = "20[0-2][0-9]"
         )
         year <- as.integer(year)
-        year_file_name <- sprintf("landuse_fraction_%d_%04d.tif", year, int_landuse_radius)
-        file.path("/mnt/nerf", "preprocessed", year_file_name)
+        year_file_name <-
+          list.files(
+            file.path("/mnt/nerf", "preprocessed"),
+            pattern = sprintf("landuse_fraction_%04d_*.*.tif$", int_years_spatial - 1),
+            full.names = TRUE
+          )
+        year_file_name
       },
       iteration = "list",
-      pattern = cross(map(chr_landuse_files), int_landuse_radius),
+      pattern = map(int_years_spatial),
       resources = targets::tar_resources(
         crew = targets::tar_resources_crew(controller = "controller_01")
       ),

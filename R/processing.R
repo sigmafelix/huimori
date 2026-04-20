@@ -346,40 +346,66 @@ gw_emittors <-
     sf::st_agr(target) <- "constant"
     sf::st_agr(clip) <- "constant"
 
+    wfun_f <- function(dist_vec, bw, wfun) {
+      if (wfun == "gaussian") {
+        w <- dnorm(dist_vec / bw)
+      } else if (wfun == "exponential") {
+        w <- exp(-dist_vec / bw)
+      } else if (wfun == "tricube") {
+        w <- (1 - (dist_vec / bw)^3)^3
+      } else if (wfun == "epanechnikov") {
+        w <- 0.75 * (1 - (dist_vec / bw)^2)
+      }
+      w
+    }
+
     # Prepare output
     gw_emission <- rep(NA_real_, nrow(input))
+    target$.gw_target_index <- seq_len(nrow(target))
 
-    # Intersect input with clip
-    input_in_clip <- sf::st_intersection(input, clip)
-    idx_in_clip <- as.integer(rownames(input_in_clip))
+    # Keep only input points inside clip without constructing intersections.
+    idx_in_clip <- which(lengths(sf::st_intersects(input, clip)) > 0L)
 
     if (length(idx_in_clip) > 0) {
       # Subset target by clip
       target_clip <- target[clip, ]
       if (nrow(target_clip) > 0) {
-        # Compute distances between all input points and all target points
-        dists <- sf::st_distance(input[idx_in_clip, ], target_clip)
-        dists <- as.matrix(dists)
-        # For each input point
-        for (i in seq_along(idx_in_clip)) {
-          dist_vec <- as.numeric(dists[i, ])
-          if (!all(dist_vec > bw)) {
-            if (wfun == "gaussian") {
-              w <- dnorm(dist_vec / bw)
-            } else if (wfun == "exponential") {
-              w <- exp(-dist_vec / bw)
-            } else if (wfun == "tricube") {
-              w <- (1 - (dist_vec / bw)^3)^3
-              w[dist_vec > bw] <- 0
-            } else if (wfun == "epanechnikov") {
-              w <- 0.75 * (1 - (dist_vec / bw)^2)
-              w[dist_vec > bw] <- 0
-            }
-            w <- w * weight[as.integer(rownames(target_clip))]
-            if (sum(w) != 0) {
-              gw_emission[idx_in_clip[i]] <-
-                sum(target_clip$emission * w) / sum(w)
-            }
+        target_emission <- target_clip$emission
+        target_weight <- weight[target_clip$.gw_target_index]
+
+        # Build sparse input-target candidate pairs inside the bandwidth,
+        # avoiding a dense input-by-target distance matrix.
+        idx_target <- sf::st_is_within_distance(
+          input[idx_in_clip, ],
+          target_clip,
+          dist = bw
+        )
+        n_target <- lengths(idx_target)
+
+        if (any(n_target > 0L)) {
+          pair_input <- rep(seq_along(idx_target), n_target)
+          pair_target <- unlist(idx_target, use.names = FALSE)
+          dist_vec <- as.numeric(
+            sf::st_distance(
+              input[idx_in_clip[pair_input], ],
+              target_clip[pair_target, ],
+              by_element = TRUE
+            )
+          )
+          idx_bw <- dist_vec <= bw
+
+          if (any(idx_bw)) {
+            pair_input <- pair_input[idx_bw]
+            pair_target <- pair_target[idx_bw]
+            w <- wfun_f(dist_vec[idx_bw], bw, wfun) * target_weight[pair_target]
+            w_sum <- rowsum(w, pair_input, reorder = FALSE)
+            weighted_sum <-
+              rowsum(target_emission[pair_target] * w, pair_input, reorder = FALSE)
+            idx_result <- as.integer(rownames(w_sum))
+            idx_nonzero <- as.numeric(w_sum[, 1]) != 0
+            gw_emission[idx_in_clip[idx_result[idx_nonzero]]] <-
+              as.numeric(weighted_sum[idx_nonzero, 1]) /
+              as.numeric(w_sum[idx_nonzero, 1])
           }
         }
       }
@@ -387,5 +413,3 @@ gw_emittors <-
     input$gw_emission <- gw_emission
     return(sf::st_drop_geometry(input))
   }
-
-

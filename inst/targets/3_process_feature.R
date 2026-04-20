@@ -1475,6 +1475,123 @@ list_process_feature <-
       )
     ),
     targets::tar_target(
+      name = list_feat_grid_landuse_rads,
+      command = {
+        chunk_size <- 1e4L
+        n_grid <- nrow(list_pred_calc_grid)
+        n_chunk <- ceiling(n_grid / chunk_size)
+
+        pad_m <- int_landuse_radius + 100
+        year_landuse <- as.integer(
+          gsub(".*?(20[0-9]{2,2}).*", "\\1", basename(chr_landuse_freq_file))
+        ) |>
+          unique()
+        init_list <- vector("list", n_chunk)
+
+        for (i in seq_len(n_chunk)) {
+          idx_start <- ((i - 1L) * chunk_size) + 1L
+          idx_end <- min(i * chunk_size, n_grid)
+          list_pred_calc_grid_i <- list_pred_calc_grid[idx_start:idx_end, ]
+
+          ext_reproj <-
+            terra::project(
+              terra::ext(list_pred_calc_grid_i) + pad_m,
+              from = "EPSG:5179",
+              to = "EPSG:4326"
+            )
+          landuse_list <-
+            Map(
+              function(file) {
+                ras <- terra::rast(file, win = ext_reproj)
+                ras <- ras[[-length(names(ras))]]
+                radius <- as.integer(
+                  gsub(".*?(0030|0100|0500|2000).*", "\\1", basename(file))
+                )
+                names(ras) <- paste0(names(ras), "_", radius)
+                ras
+              },
+              chr_landuse_freq_file
+            )
+          landuse_ras <- Reduce(c, landuse_list)
+
+          # landuse_ras <-
+          #   terra::rast(
+          #     landuse_concat,
+          #     win = ext_reproj
+          #   )
+
+          list_pred_calc_grid_i[["year"]] <- year_landuse
+          init_list[[i]] <-
+            chopin::extract_at(
+              x = landuse_ras,
+              y = list_pred_calc_grid_i,
+              radius = 1e-6,
+              id = c("gid", "year"),
+              func = "mean",
+              force_df = TRUE
+            )
+
+          # rm(landuse_ras, list_pred_calc_grid_i)
+          # if (i %% 10L == 0L) {
+          #   gc(FALSE)
+          # }
+        }
+
+        df_extract <- collapse::rowbind(init_list, fill = TRUE)
+        # cols_landuse <- setdiff(names(df_extract), c("gid", "year"))
+        # data_radius <-
+        #   stringi::stri_extract_first_regex(
+        #     basename(chr_landuse_freq_file),
+        #     pattern = "20[0-9]{2,2}"
+        #   )
+
+        # df_extract <-
+        #   df_extract |>
+        #     dplyr::rename_with(
+        #       .cols = dplyr::all_of(cols_landuse),
+        #       .fn = ~ paste0("landuse_", .x, "_", data_radius)
+        #     )
+        df_extract
+      },
+      iteration = "list",
+      pattern = cross(list_pred_calc_grid, chr_landuse_freq_file),
+      resources = targets::tar_resources(
+        crew = targets::tar_resources_crew(controller = "controller_20")
+      )
+    ),
+    targets::tar_target(
+      name = df_feat_grid_landuse_agg,
+      command = {
+        radii <- unlist(int_landuse_radius)
+        n_radius <- length(radii)
+        idx_group <- split(
+          seq_along(df_feat_grid_landuse),
+          ceiling(seq_along(df_feat_grid_landuse) / n_radius)
+        )
+
+        purrr::map(idx_group, function(idx) {
+          df_group <- purrr::map2(
+            .x = df_feat_grid_landuse[idx],
+            .y = radii,
+            .f = function(df_landuse, radius_flag) {
+              cols_landuse <- setdiff(names(df_landuse), c("gid", "year"))
+              df_landuse |>
+                dplyr::rename_with(
+                  .cols = dplyr::all_of(cols_landuse),
+                  .fn = ~ paste0(., "_", radius_flag)
+                )
+            }
+          )
+
+          Reduce(
+            \(x, y) collapse::join(x, y, on = c("gid", "year")),
+            df_group
+          )
+        })
+      },
+      iteration = "list"
+    ),
+    targets::tar_target(
       name = df_feat_grid_mtpi,
       command = {
         mtpi_ras <- terra::rast(chr_mtpi_file)
@@ -1508,18 +1625,29 @@ list_process_feature <-
         crew = targets::tar_resources_crew(controller = "controller_20")
       )
     ),
+    
     targets::tar_target(
       name = df_feat_grid_emittors,
       command = {
-        result <-
-          gw_emittors(
-            input = list_pred_calc_grid,
-            target = sf_emission_locs,
-            clip = sf_korea_watershed,
-            wfun = "gaussian",
-            bw = 5000,
-            dist_method = "geodesic"
-          )
+        result <- purrr::map(seq_len(nrow(list_pred_calc_grid)), \(x) gw_emittors(
+           input = list_pred_calc_grid[x, ],
+           target = sf_emission_locs,
+           clip = sf_korea_watershed,
+           wfun = "gaussian",
+           bw = 2000,
+           dist_method = "geodesic"
+        )) |>
+        purrr::list_rbind()
+
+        # result <-
+        #   gw_emittors(
+        #     input = list_pred_calc_grid,
+        #     target = sf_emission_locs,
+        #     clip = sf_korea_watershed,
+        #     wfun = "gaussian",
+        #     bw = 5000,
+        #     dist_method = "geodesic"
+        #   )
         result
       },
       iteration = "list",
@@ -1528,27 +1656,27 @@ list_process_feature <-
         crew = targets::tar_resources_crew(controller = "controller_08")
       )
     ),
-   targets::tar_target(
-     name = df_feat_grid_merged,
-     command = {
-       df_res <- df_feat_grid_d_road %>%
-         dplyr::bind_cols(df_feat_grid_landuse)
-       df_res %>%
-         dplyr::mutate(
-           dsm = as.numeric(df_feat_grid_dsm),
-           dem = as.numeric(df_feat_grid_dem),
-           mtpi = as.numeric(df_feat_grid_mtpi),
-           n_emittors_watershed = as.numeric(df_feat_grid_emittors$n_emittors_watershed),
-           d_road = as.numeric(d_road) / 1000
-         )
-     },
-     iteration = "list",
-     pattern = map(
-       df_feat_grid_d_road,
-       df_feat_grid_landuse
-     )
-   )
-)
+    targets::tar_target(
+      name = df_feat_grid_merged,
+      command = {
+        df_res <- df_feat_grid_d_road %>%
+          dplyr::bind_cols(df_feat_grid_landuse_agg)
+        df_res %>%
+          dplyr::mutate(
+            dsm = as.numeric(df_feat_grid_dsm),
+            dem = as.numeric(df_feat_grid_dem),
+            mtpi = as.numeric(df_feat_grid_mtpi),
+            #n_emittors_watershed = as.numeric(df_feat_grid_emittors$n_emittors_watershed),
+            d_road = as.numeric(d_road) / 1000
+          )
+      },
+      iteration = "list",
+      pattern = map(
+        df_feat_grid_d_road,
+        df_feat_grid_landuse_agg
+      )
+    )
+  )
 
 
 
