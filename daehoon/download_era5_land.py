@@ -16,7 +16,7 @@ variables = [
 ]
 
 # 2018년부터 2024년까지 설정
-years = range(2009, 2017)
+years = range(2017, 2018)
 times = [f"{h:02d}:00" for h in range(24)]
 
 # 공간 범위: [North, West, South, East] (한반도 인근)

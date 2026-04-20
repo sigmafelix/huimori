@@ -29,7 +29,7 @@ controller_20 <-
 # Set target options:
 targets::tar_option_set(
   packages =
-    c("targets", "geotargets",
+    c("targets", "geotargets", "rlang",
       "terra", "sf", "dplyr", "collapse",
       "data.table", "tibble", "tune", "yardstick", "workflows",
       "recipes", "dials", "lubridate", "rgee",
@@ -55,7 +55,8 @@ targets::tar_option_set(
 # Run the R scripts in the R/ folder with your custom functions:
 targets::tar_source("inst/targets/1_init_targets.R")
 targets::tar_source("inst/targets/2_pin_files.R")
-targets::tar_source("inst/targets/3_process_feature.R")
+targets::tar_source("inst/targets/3_process_feature.R")         
+targets::tar_source("inst/targets/3_1_process_feature_daily.R")  
 targets::tar_source("inst/targets/4_tune_models.R")
 
 # Replace the target list below with your own:
@@ -63,8 +64,11 @@ list(
   list_configs,
   list_basefiles,
   list_process_site,
-  list_process_feature,
   list_process_split,
+  list_process_feature,
+  list_process_site_daily,
+  # list_process_split_daily,
+  list_process_feature_daily,
   list_fit_models,
   list_tune_models,
   list_tune_eval
