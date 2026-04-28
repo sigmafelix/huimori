@@ -1,5 +1,5 @@
 ---
-title: "huimori_1.5_feature_engineering_ERA5"
+title: "huimori_4_analysis_ERA5"
 format:
   html:
     theme: cosmo
@@ -287,10 +287,10 @@ qs::qsave(
   file.path(save_path, "sf_monitors_correct.qs"), 
   nthreads = 12
 )
-# sf_monitors_correct <- qs::qread(
-#   file.path(save_path, "sf_monitors_correct.qs"), 
-#   nthreads = 12
-# )
+sf_monitors_correct <- qs::qread(
+  file.path(save_path, "sf_monitors_correct.qs"),
+  nthreads = 12
+)
 
 
 ## 4. sf_monitors_correct_yr (Branched by year) ####
@@ -702,23 +702,15 @@ qs::qsave(
   file.path(save_path, "df_feat_correct_merged.qs"), 
   nthreads = 12
 )
-# df_feat_correct_merged <- qs::qread(
-#   file.path(save_path, "df_feat_correct_merged.qs"), 
-#   nthreads = 12
-# )
+df_feat_correct_merged <- qs::qread(
+  file.path(save_path, "df_feat_correct_merged.qs"),
+  nthreads = 12
+)
 ```
 
 # 3.1
 
 ```{r}
-library(dplyr)
-library(sf)
-library(lubridate)
-library(geosphere)
-library(tidyr)
-library(purrr)
-library(huimori)
-
 # 1. 일별 농도 집계 (Hourly -> Daily)
 ak_sites_daily <- huimori::summarize_daily(
   data = dt_measurements, 
@@ -791,10 +783,10 @@ qs::qsave(
   file.path(save_path, "sf_monitors_correct_daily.qs"), 
   nthreads = 12
 )
-# sf_monitors_correct_daily <- qs::qread(
-#   file.path(save_path, "sf_monitors_correct_daily.qs"), 
-#   nthreads = 12
-# )
+sf_monitors_correct_daily <- qs::qread(
+  file.path(save_path, "sf_monitors_correct_daily.qs"),
+  nthreads = 12
+)
 
 
 # 5. 월별로 브랜칭
@@ -803,6 +795,16 @@ sf_monitors_correct_month <- lapply(chr_months_spatial, function(mon) {
     dplyr::filter(format(date, "%Y-%m") == mon)
   return(res)
 })
+
+qs::qsave(
+  sf_monitors_correct_month, 
+  file.path(save_path, "sf_monitors_correct_month.qs"), 
+  nthreads = 12
+)
+sf_monitors_correct_month <- qs::qread(
+  file.path(save_path, "sf_monitors_correct_month.qs"),
+  nthreads = 12
+)
 ```
 
 
@@ -887,10 +889,10 @@ qs::qsave(
   file.path(save_path, "df_feat_correct_aod_daily.qs"), 
   nthreads = 12
 )
-# df_feat_correct_aod_daily <- qs::qread(
-#   file.path(save_path, "df_feat_correct_aod_daily.qs"), 
-#   nthreads = 12
-# )
+df_feat_correct_aod_daily <- qs::qread(
+  file.path(save_path, "df_feat_correct_aod_daily.qs"),
+  nthreads = 12
+)
 ```
 
 ### era5_land_daily
@@ -1006,11 +1008,12 @@ qs::qsave(
   file.path(save_path, "df_feat_correct_era5_land_daily.qs"), 
   nthreads = 12
 )
-# df_feat_correct_era5_land_daily <- qs::qread(
-#   file.path(save_path, "df_feat_correct_era5_land_daily.qs"), 
-#   nthreads = 12
-# )
+df_feat_correct_era5_land_daily <- qs::qread(
+  file.path(save_path, "df_feat_correct_era5_land_daily.qs"),
+  nthreads = 12
+)
 ```
+
 
 ### era5_blh_daily
 
@@ -1085,15 +1088,15 @@ qs::qsave(
   file.path(save_path, "df_feat_correct_era5_blh_daily.qs"), 
   nthreads = 12
 )
-# df_feat_correct_era5_blh_daily <- qs::qread(
-#   file.path(save_path, "df_feat_correct_era5_blh_daily.qs"), 
-#   nthreads = 12
-# )
+df_feat_correct_era5_blh_daily <- qs::qread(
+  file.path(save_path, "df_feat_correct_era5_blh_daily.qs"),
+  nthreads = 12
+)
 ```
 
 ### merged
 
-```{r}
+```
 sf_monitors_correct_month # 모든 column
 df_feat_correct_merged # d_road, dem, dsm, gw_emission, landuse_*, mtpi, mtpi_1km
 df_feat_correct_era5_land_daily # t2m, u10, v10, sp, ssr, tp
@@ -1103,65 +1106,47 @@ df_feat_correct_era5_blh_daily # blh
 
 
 ```{r}
-sf_monitors_correct[c("TMSID","TMSID2","ndays")]
-```
-
-```{r}
 df_feat_correct_merged_daily <- lapply(seq_along(chr_months_spatial), function(i) {
   
-  curr_mon_str <- chr_months_spatial[i] # "2017-01" 등
+  curr_mon_str <- chr_months_spatial[i]
   curr_yr <- as.numeric(substr(curr_mon_str, 1, 4))
-  
-  # 1. 기준 데이터 추출 (관측 농도 리스트)
   base_data <- sf_monitors_correct_month[[i]]
+
   if (is.null(base_data) || nrow(base_data) == 0) return(NULL)
 
-  # 2. Daily 변수 순차 병합 (NULL 체크 로직 강화)
-  res_daily <- base_data %>% dplyr::mutate(year = curr_yr)
-
-  # ERA5 Land Daily 조인
-  if (!is.null(df_feat_correct_era5_land_daily[[i]])) {
-    res_daily <- res_daily %>% 
-      dplyr::left_join(df_feat_correct_era5_land_daily[[i]], by = c("TMSID", "TMSID2", "date"))
-  }
-
-  # AOD Daily 조인
-  if (!is.null(df_feat_correct_aod_daily[[i]])) {
-    res_daily <- res_daily %>% 
-      dplyr::left_join(df_feat_correct_aod_daily[[i]], by = c("TMSID", "TMSID2", "date"))
-  }
-
-  # ERA5 BLH Daily 조인
-  if (!is.null(df_feat_correct_era5_blh_daily[[i]])) {
-    res_daily <- res_daily %>% 
-      dplyr::left_join(df_feat_correct_era5_blh_daily[[i]], by = c("TMSID", "TMSID2", "date"))
-  }
-
-  # 3. 연도별 환경 피처 병합 (9개 연도 리스트 대응)
-  yearly_idx <- which(sapply(df_feat_correct_merged, function(x) any(x$year == curr_yr)))
+  dynamic_features <- list(
+    df_feat_correct_era5_land_daily[[i]],
+    df_feat_correct_aod_daily[[i]],
+    df_feat_correct_era5_blh_daily[[i]]
+  )
   
-  if (length(yearly_idx) > 0) {
-    static_feat <- df_feat_correct_merged[[yearly_idx[1]]] %>%
-      dplyr::select(
-        TMSID, TMSID2, year,
-        d_road, dem, dsm, gw_emission, 
-        starts_with("landuse_"), 
-        mtpi, mtpi_1km
-      )
-    
-    res_daily <- res_daily %>% 
-      dplyr::left_join(static_feat, by = c("TMSID", "TMSID2", "year"))
-  }
+  res_daily <- Reduce(function(x, y) {
+    if (is.null(y)) x else dplyr::left_join(x, y, by = c("TMSID", "TMSID2", "date"))
+  }, dynamic_features, init = base_data %>% dplyr::mutate(year = curr_yr))
 
-  # 4. 공간 속성 제거 후 반환
-  return(res_daily %>% sf::st_drop_geometry())
+  yearly_feat <- Filter(function(x) any(x$year == curr_yr), df_feat_correct_merged)[[1]]
+  
+  static_feat <- yearly_feat %>%
+    dplyr::select(TMSID, TMSID2, year, d_road, dem, dsm, gw_emission, 
+                  starts_with("landuse_"), mtpi, mtpi_1km)
+
+  res_daily %>% 
+    dplyr::left_join(static_feat, by = c("TMSID", "TMSID2", "year")) %>%
+    sf::st_drop_geometry()
 })
 
-# 리스트 이름 부여 및 NULL 결과 제거
+# 결과 정리
 names(df_feat_correct_merged_daily) <- chr_months_spatial
-df_feat_correct_merged_daily <- Filter(Negate(is.null), df_feat_correct_merged_daily)
+df_feat_correct_merged_daily <- purrr::compact(df_feat_correct_merged_daily)
+
+qs::qsave(
+  df_feat_correct_merged_daily, 
+  file.path(save_path, "df_feat_correct_merged_daily.qs"), 
+  nthreads = 12
+)
+df_feat_correct_merged_daily <- qs::qread(
+  file.path(save_path, "df_feat_correct_merged_daily.qs"),
+  nthreads = 12
+)
 ```
-
-
-
 

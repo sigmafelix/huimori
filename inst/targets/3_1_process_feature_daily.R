@@ -386,5 +386,57 @@ list_process_feature_daily <-
       resources = targets::tar_resources(
         crew = targets::tar_resources_crew(controller = "controller_15")
       )
+    ),
+    
+    # F11. Merged (daily)
+    targets::tar_target(
+      name = df_feat_correct_merged_daily,
+      command = {
+        curr_mon_str <- chr_months_spatial
+        curr_yr <- as.numeric(substr(curr_mon_str, 1, 4))
+        base_data <- sf_monitors_correct_month
+        if (is.null(base_data) || nrow(base_data) == 0) return(NULL)
+
+        res_daily <- base_data %>% 
+          dplyr::mutate(year = curr_yr)
+        
+        dynamic_list <- list(
+          df_feat_correct_era5_land_daily,
+          df_feat_correct_aod_daily,
+          df_feat_correct_era5_blh_daily
+        )
+        
+        for (feat_df in dynamic_list) {
+          if (!is.null(feat_df) && nrow(feat_df) > 0) {
+            res_daily <- res_daily %>%
+              dplyr::left_join(feat_df, by = c("TMSID", "TMSID2", "date"))
+          }
+        }
+
+        yearly_feat_raw <- Filter(function(x) any(x$year == curr_yr), df_feat_correct_merged)
+        
+        if (length(yearly_feat_raw) > 0) {
+          static_feat <- yearly_feat_raw[[1]] %>%
+            dplyr::select(
+              TMSID, TMSID2, year,
+              d_road, dem, dsm, gw_emission, 
+              starts_with("landuse_"), 
+              mtpi, mtpi_1km
+            )
+          
+          res_daily <- res_daily %>% 
+            dplyr::left_join(static_feat, by = c("TMSID", "TMSID2", "year"))
+        }
+        
+        res_daily %>% sf::st_drop_geometry()
+      },
+      pattern = map(
+        chr_months_spatial, 
+        sf_monitors_correct_month, 
+        df_feat_correct_era5_land_daily, 
+        df_feat_correct_aod_daily, 
+        df_feat_correct_era5_blh_daily
+      ),
+      iteration = "list"
     )
    )
