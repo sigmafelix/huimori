@@ -1657,23 +1657,44 @@ list_process_feature <-
       )
     ),
     targets::tar_target(
-      name = df_feat_grid_merged,
+      name = df_feat_grid_spatial,
       command = {
-        df_res <- df_feat_grid_d_road %>%
-          dplyr::bind_cols(df_feat_grid_landuse_agg)
-        df_res %>%
+        list_pred_calc_grid |>
           dplyr::mutate(
-            dsm = as.numeric(df_feat_grid_dsm),
-            dem = as.numeric(df_feat_grid_dem),
-            mtpi = as.numeric(df_feat_grid_mtpi),
-            #n_emittors_watershed = as.numeric(df_feat_grid_emittors$n_emittors_watershed),
-            d_road = as.numeric(d_road) / 1000
+            dsm = as.numeric(unlist(df_feat_grid_dsm)),
+            dem = as.numeric(unlist(df_feat_grid_dem)),
+            mtpi = as.numeric(unlist(df_feat_grid_mtpi))
           )
       },
       iteration = "list",
+      pattern = map(list_pred_calc_grid, df_feat_grid_dsm, df_feat_grid_dem, df_feat_grid_mtpi)
+    ),
+    targets::tar_target(
+      name = df_feat_grid_merged,
+      command = {
+        year_int <- int_years_spatial
+        df_feat_grid_spatial_year <-
+          df_feat_grid_spatial |>
+          dplyr::mutate(
+            year = int_years_spatial
+          )
+        df_res <- df_feat_grid_d_road |>
+          dplyr::select(d_road) |>
+          dplyr::bind_cols(list_feat_grid_landuse_rads) |>
+          dplyr::mutate(
+            d_road = as.numeric(d_road) / 1000
+          ) |>
+          dplyr::left_join(
+            df_feat_grid_spatial_year,
+            by = c("gid", "year")
+          )
+        df_res
+      },
+      iteration = "list",
       pattern = map(
+        cross(df_feat_grid_spatial, int_years_spatial),
         df_feat_grid_d_road,
-        df_feat_grid_landuse_agg
+        list_feat_grid_landuse_rads
       )
     )
   )

@@ -28,7 +28,11 @@ dtx2 <- dtx[
   ,
   `:=`(
     season = sin(2 * pi * as.integer(strftime(date, format = "%j")) / 365.25),
-    weekday = lubridate::wday(date, week_start = 1),
+    weekday = lubridate::wday(date, week_start = 1)
+  )
+][
+  ,
+  `:=`(
     is_weekend = ifelse(weekday %in% c(6, 7), 1, 0)
   )
 ]
@@ -68,7 +72,7 @@ train_data <- training(pm10_split)
 test_data <- testing(pm10_split)
 
 pm10_mod <- boost_tree(
-  mtry = 7,
+  mtry = 15,
   trees = 2000,
   learn_rate = tune(),
   min_n = 5,
@@ -91,7 +95,7 @@ pm10_fitted <- finetune::tune_race_anova(
   pm10_workflow,
   resamples = train_cv,
   metrics = metric_set(rmse, mae, rsq),
-  control = control_race(save_pred = TRUE, verbose = TRUE, parallel_over = NULL)
+  control = finetune::control_race(save_pred = TRUE, save_workflow = TRUE, verbose = TRUE, parallel_over = NULL, workflow_size = 300)
 )
 
 # recover logarithm in predicted values
@@ -111,7 +115,7 @@ train_data <- training(pm25_split)
 test_data <- testing(pm25_split)
 
 pm25_mod <- boost_tree(
-  mtry = 7,
+  mtry = 12,
   trees = 2000,
   learn_rate = tune(),
   min_n = 5,
@@ -133,7 +137,7 @@ pm25_fitted <- finetune::tune_race_anova(
   pm25_workflow,
   resamples = train_cv,
   metrics = metric_set(rmse, mae, rsq),
-  control = control_race(save_pred = TRUE, verbose = TRUE, parallel_over = NULL)
+  control = finetune::control_race(save_pred = TRUE, save_workflow = TRUE, verbose = TRUE, parallel_over = NULL, workflow_size = 100)
 )
 # recover logarithm in predicted values
 pm25_pred_recovered <- exp(pm25_fitted$.predictions[[1]]$.pred) - 0.1
