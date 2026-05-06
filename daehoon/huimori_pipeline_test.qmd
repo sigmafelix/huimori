@@ -1,0 +1,31 @@
+---
+title: "huimori_4_analysis_ERA5"
+format:
+  html:
+    theme: cosmo
+    toc: true
+    toc-depth: 3
+    toc-location: left
+    code-fold: show
+    code-summary: "코드 보기"
+    code-overflow: wrap
+    number-sections: true
+    smooth-scroll: true
+    embed-resources: true
+    df-print: paged
+    page-layout: full
+editor: visual
+---
+
+```{r}
+library(devtools)
+install.packages(".")
+
+library(targets)
+targets::tar_validate()
+targets::tar_destroy()
+targets::tar_make()
+targets::tar_visnetwork()
+```
+
+# 1
