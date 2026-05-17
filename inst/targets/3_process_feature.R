@@ -1064,6 +1064,11 @@ list_process_feature <-
           ) %>%
           sf::st_drop_geometry()
         names(df_res) <- sub("mean.", "", names(df_res))
+        df_res <- df_res %>% 
+          dplyr::relocate(
+            any_of(c("year", "ndays", "PM10", "PM25")), 
+            .after = TMSID2
+          )
         df_res
       },
       pattern = map(

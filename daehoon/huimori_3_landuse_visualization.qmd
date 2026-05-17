@@ -25,6 +25,7 @@ library(terra)
 library(ncdf4)
 library(httr)
 library(exactextractr)
+library(furrr)
 library(future)
 library(future.apply)
 library(future.mirai)
@@ -32,6 +33,7 @@ library(parallel)
 library(readxl)
 library(arrow)
 library(geodata)
+library(tmap)
 
 save_dir <- "~/huimori/daehoon/landuse_res"
 if (!dir.exists(save_dir)) dir.create(save_dir, recursive = TRUE)
@@ -60,16 +62,18 @@ plot(sf::st_geometry(sf_korea_all),
 dev.off()
 ```
 
-
 ## 포인트 샘플링 (10000개)
 
 ```{r}
-set.seed(42) # 재현성을 위한 시드 설정
-pts_samples <- st_sample(sf_korea_all, size = 10000, type = "random", exact = TRUE)
-sf_random_pts <- st_sf(
-  ID = 1:10000,
-  geometry = pts_samples
-)
+# set.seed(42) # 재현성을 위한 시드 설정
+# pts_samples <- st_sample(sf_korea_all, size = 10000, type = "random", exact = TRUE)
+# sf_random_pts <- st_sf(
+#   ID = 1:10000,
+#   geometry = pts_samples
+# )
+# 
+# st_write(sf_random_pts, file.path(save_dir, "sf_random_pts.gpkg"), delete_dsn = TRUE)
+sf_random_pts <- st_read(file.path(save_dir, "sf_random_pts.gpkg"))
 
 png("~/huimori/random_points.png", width = 800, height = 800)
 plot(st_geometry(sf_korea_all), border = "grey", main = "Random 10,000 Points in Korea")
@@ -81,9 +85,13 @@ sf_pts_buf <- sf_random_pts %>%
   st_transform(4326) # WGS84
 ```
 
-# 새로운 래스터 데이터
+# 새로운(new) 래스터 데이터
+
+## 값 추출 (mean 기반)
 
 ```{r}
+#| eval: false
+
 # 1. 파일 목록 및 지점 데이터 준비
 base_path <- "/mnt/nerf/preprocessed"
 all_files <- list.files(base_path, pattern = "\\.tif$", full.names = TRUE)
@@ -156,276 +164,320 @@ for (f in all_files) {
 }
 
 # 4. 최종 병합
-df_final <- bind_rows(final_results)
+ref_new <- terra::rast(all_files[1])
+mapping_table <- data.frame(
+  layer = 1:nlyr(ref_new),
+  class_code = names(ref_new)
+)
+
+mapping_guide <- mapping_table %>%
+  mutate(
+    # class_code에서 숫자만 추출 (예: landuse_class_10 -> 10)
+    actual_class_code = as.integer(str_extract(class_code, "\\d+"))
+  ) %>%
+  select(layer, actual_class_code)
+
+df_final <- bind_rows(final_results) %>%
+  left_join(mapping_guide, by = "layer") %>%
+  mutate(layer = actual_class_code) %>%
+  select(ID, year, layer, pixel_value, buffer, type) %>% # 컬럼 순서 정리
+  arrange(ID) %>% 
+  filter(layer != 255)
+
 arrow::write_parquet(df_final, file.path(save_dir, "landuse_extract_mean.parquet"))
 ```
 
-# 기존 래스터 데이터
+## 확인
 
 ```{r}
-chr_dir_data <- "/mnt/hdd001/Korea"
-chr_landuse_file <- list.files(file.path(chr_dir_data, "landuse", "glc_fcs30d"), pattern = "tif$", full.names = TRUE)
-chr_landuse_freq_file <- file.path(chr_dir_data, "landuse", sprintf("glc_freq_%d.tif", as.integer(stringi::stri_extract_first_regex(chr_landuse_file, "20[0-2][0-9]"))))
-chr_landuse_freq_file <- chr_landuse_freq_file[!grepl("2009", chr_landuse_freq_file)]
-
-buffer_radii <- c(30, 100, 500, 2000)
-pts_utm <- st_transform(sf_random_pts, 5179)
-
-# 각 버퍼별로 리스트 생성
-pts_buffers <- lapply(buffer_radii, function(r) {
-  buf <- st_buffer(pts_utm, dist = r)
-  st_transform(buf, 4326)
-})
-names(pts_buffers) <- as.character(buffer_radii)
-
-plan(mirai_multisession, workers = 13)
-
-final_results <- future_lapply(chr_landuse_freq_file, function(file_path) {
-  
-  # 해당 연도 및 파일명 정보 추출
-  file_name <- basename(file_path)
-  curr_year <- stringi::stri_extract_first_regex(file_name, "20[0-2][0-9]")
-  
-  cat(paste0("\n[Start] Processing: ", file_name, "\n"))
-  
-  # 래스터 로드 및 레이어 이름 설정
-  r <- rast(file_path)
-  class_codes <- c(0, 10, 11, 20, 51, 52, 61, 62, 71, 72, 81, 82, 91, 
-                   120, 130, 140, 150, 181, 182, 183, 186, 187, 190, 200, 210)
-  names(r) <- paste0("C", class_codes)
-
-  # 각 버퍼 규모별 추출 수행
-  year_res_list <- lapply(names(pts_buffers), function(radius) {
-
-    ext <- exact_extract(r, pts_buffers[[radius]], fun = "frac", 
-                         stack_apply = TRUE, progress = FALSE)
-    
-
-    ext %>%
-      mutate(ID = row_number(), buffer = as.numeric(radius)) %>%
-      pivot_longer(cols = starts_with("frac_"), 
-                   names_to = "class", 
-                   values_to = "pixel_value") %>%
-      mutate(
-        year = as.integer(curr_year),
-        type = "frac",
-        class = gsub("frac_C", "", class)
-      ) %>%
-      filter(pixel_value > 0) # 용량 최적화를 위해 0값 제외
-  })
-
-  year_df <- bind_rows(year_res_list)
-
-  mid_save_path <- file.path(save_dir, paste0("res_", file_name, ".rds"))
-  saveRDS(year_df, mid_save_path)
-  
-  cat(paste0("[Saved] Intermediate: ", mid_save_path, "\n"))
-  
-  rm(r, year_res_list); gc() # 메모리 정리
-  return(year_df)
-  
-}, future.seed = TRUE)
-
-
-df_final <- bind_rows(final_results)
-
-arrow::write_parquet(df_final, file.path(save_dir, "landuse_extract_frac.parquet"))
+landuse_extract_mean <- arrow::read_parquet(file.path(save_dir, "landuse_extract_mean.parquet"))
 ```
 
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
+# 기존(old) 래스터 데이터
+
+## 값 추출 (frac 기반)
+
+```{r}
+#| eval: false
+
+chr_dir_data <- "/mnt/hdd001/Korea"
+chr_landuse_file <- list.files(file.path(chr_dir_data, "landuse", "glc_fcs30d"), pattern = "tif$", full.names = TRUE) |> grep(pattern = "2009", invert = TRUE, value = TRUE)
+
+raster_landuse <- rast(chr_landuse_file)
+
+layer_names <- gsub(".*_([0-9]{4})\\.tif$", "\\1", basename(chr_landuse_file))
+names(raster_landuse) <- layer_names
+
+print(raster_landuse)
+
+# 1. 사전 설정 및 경로 확보
+radii <- c(30, 100, 500, 2000)
+tif_paths <- chr_landuse_file  # 앞서 정의한 13개 연도 파일 경로
+
+# 2. 메인 루틴: 특정 버퍼 크기에 대해 13개 연도를 병렬 처리
+process_by_buffer <- function(r) {
+  cat(paste0("\n[Start] Processing Buffer: ", r, "m\n"))
+  
+  # 투영좌표계에서 버퍼 생성 후 4326 변환
+  sf_buffers <- sf_random_pts %>%
+    st_buffer(dist = r) %>%
+    st_transform(4326)
+  
+  # 13개 연도 파일을 13개 코어에 분배
+  results_list <- mclapply(seq_along(tif_paths), function(i) {
+    # 워커 내부 라이브러리 로드
+    library(terra)
+    library(exactextractr)
+    library(tidyr)
+    library(dplyr)
+    
+    current_path <- tif_paths[i]
+    curr_year <- as.numeric(gsub(".*_([0-9]{4})\\.tif$", "\\1", basename(current_path)))
+    
+    # 레이어 로드 및 결측치 처리
+    lyr <- rast(current_path)
+    NAflag(lyr) <- 1.844674e+19
+    
+    # 분율 추출 (fun = "frac")
+    # 결과 컬럼명 형식: frac_10, frac_20 ...
+    ext_res <- exact_extract(lyr, sf_buffers, fun = "frac", progress = FALSE)
+    
+    # ID 부여 및 Long-format 변환
+    ext_res$ID <- as.integer(sf_random_pts$ID)
+    
+    res_long <- ext_res %>%
+      pivot_longer(
+        cols = starts_with("frac"),
+        names_to = "class_code",            # frac_ 뒤의 분류 코드 (10, 11 등)
+        names_pattern = "frac_(.*)",
+        values_to = "fraction_val"          # 계산된 비율 값 (0, 0.999 등)
+      ) %>%
+      mutate(
+        ID = as.integer(ID),
+        year = as.numeric(curr_year),
+        layer = as.integer(class_code),     
+        pixel_value = as.numeric(fraction_val), 
+        buffer = as.numeric(r),
+        type = "old"
+      ) %>%
+      select(ID, year, layer, pixel_value, buffer, type)
+    
+    return(res_long)
+  }, mc.cores = 13, mc.preschedule = FALSE)
+  
+  # 버퍼별 결과 병합
+  return(bind_rows(results_list))
+}
+
+# 3. 버퍼 리스트에 대해 순차 실행 (메모리 안전을 위해 외부 루프는 순차 처리)
+final_list <- list()
+for (r in radii) {
+  res_df <- process_by_buffer(r)
+  final_list[[as.character(r)]] <- res_df
+  
+  # 중간 저장 (RDS)
+  save_name <- paste0("res_buffer_", r, ".rds")
+  saveRDS(res_df, file.path(save_dir, save_name))
+  cat(paste0("[Saved] ", save_name, "\n"))
+}
+
+# 4. 최종 병합 및 Parquet 저장
+landuse_extract_frac <- bind_rows(final_list)
+arrow::write_parquet(landuse_extract_frac, file.path(save_dir, "landuse_extract_frac.parquet"))
+
+cat("\n[All Done] Process completed successfully.\n")
+```
+
+## 확인
+
+```{r}
+landuse_extract_frac <- arrow::read_parquet(file.path(save_dir, "landuse_extract_frac.parquet"))
+```
+
+```{r}
+unique(landuse_extract_frac$layer) %>% sort()
+unique(landuse_extract_mean$layer) %>% sort()
+landuse_extract_frac
+landuse_extract_mean
+```
+
+# 통합하기
+
+## 값 통합
+
+diff = (new 래스터에서 얻은 mean 기반 값) - (old 래스터에서 얻은 frac 기반 값)
+
+```{r}
+# data.table 객체로 변환
+setDT(landuse_extract_frac)
+setDT(landuse_extract_mean)
+
+# 조인 키(Key) 설정 - 바이너리 서칭을 위한 정렬 및 인덱싱
+setkey(landuse_extract_frac, ID, year, layer, buffer)
+setkey(landuse_extract_mean, ID, year, layer, buffer)
+
+# Full Join 수행
+dt_combined <- merge(
+  landuse_extract_frac, 
+  landuse_extract_mean, 
+  by = c("ID", "year", "layer", "buffer"), 
+  all = TRUE, 
+  suffixes = c("_old", "_new")
+)
+
+# 결측치(NA)를 0으로 채우고 diff 계산 (In-place 연산)
+dt_combined[is.na(pixel_value_old), pixel_value_old := 0]
+dt_combined[is.na(pixel_value_new), pixel_value_new := 0]
+
+# diff 타입의 데이터 생성
+dt_diff <- dt_combined[, .(
+  ID, year, layer, 
+  pixel_value = pixel_value_new - pixel_value_old, 
+  buffer, 
+  type = "diff"
+)]
+
+# 최종 통합 객체 생성
+# 필터링을 거친 순수 데이터들만 결합
+landuse_extract_integrated <- rbindlist(list(
+  landuse_extract_frac[, .(ID, year, layer, pixel_value, buffer, type)],
+  landuse_extract_mean[, .(ID, year, layer, pixel_value, buffer, type)],
+  dt_diff
+))
+
+# ID와 type 순으로 최종 정렬
+setkey(landuse_extract_integrated, ID, year, buffer, layer, type)
+
+# 결과 확인
+print(landuse_extract_integrated)
+arrow::write_parquet(landuse_extract_integrated, file.path(save_dir, "landuse_extract_integrated.parquet"))
+# landuse_extract_integrated <- arrow::read_parquet(file.path(save_dir, "landuse_extract_integrated.parquet"))
+# unique(landuse_extract_integrated$year)
+# unique(landuse_extract_integrated$layer)
+# unique(landuse_extract_integrated$buffer)
+```
+
+## 공간데이터와 통합
+
+```{r}
+#| eval: false
+
+plan(mirai_multisession, workers = 13)
+setkey(landuse_extract_integrated, year, layer, buffer)
+
+job_grid <- expand.grid(
+  year  = sort(unique(landuse_extract_integrated$year)),
+  layer = sort(unique(landuse_extract_integrated$layer))
+)
+
+universal_precision_breaks <- c(-1, -1e-2, -1e-4, -1e-6, 1e-6, 1e-4, 1e-2, 1)
+
+cat(">>> Exporting shared objects to workers...\n")
+plan_env <- new.env()
+furrr_options_obj <- furrr_options(
+  globals = list(
+    landuse_extract_integrated = landuse_extract_integrated,
+    sf_random_pts              = sf_random_pts,
+    sf_korea_all               = sf_korea_all,
+    job_grid                   = job_grid,
+    universal_precision_breaks = universal_precision_breaks,
+    save_dir                   = save_dir
+  ),
+  seed = TRUE
+)
+
+cat(">>> Starting Parallel Map Generation...\n")
+
+future_map(
+  seq_len(nrow(job_grid)),
+  function(i) {
+
+    library(tmap)
+    library(sf)
+    library(data.table)
+    library(dplyr)
+    options(bitmapType = "cairo")
+
+    curr_year  <- job_grid$year[i]
+    curr_layer <- job_grid$layer[i]
+
+    maps_list <- lapply(c(30, 100, 500, 2000), function(buf) {
+
+      plot_data <- landuse_extract_integrated[
+        year == curr_year & layer == curr_layer &
+        type == "diff"   & buffer == buf
+      ]
+      if (nrow(plot_data) == 0) return(NULL)
+
+      sf_pts_sub <- sf_random_pts[sf_random_pts$ID %in% plot_data$ID, ] %>%
+        inner_join(plot_data, by = "ID")
+
+      tm_shape(sf_korea_all) +
+        tm_polygons(fill = "white", col = "grey95") +
+      tm_shape(sf_pts_sub) +
+        tm_dots(
+          fill       = "pixel_value",
+          fill.scale = tm_scale_intervals(
+            values   = "brewer.rd_bu",
+            breaks   = universal_precision_breaks,
+            midpoint = 0
+          ),
+          fill.legend = tm_legend(title = paste0(buf, "m"), frame = TRUE),
+          size        = 0.06
+        ) +
+        tm_title(text = paste0("Y", curr_year, " L", curr_layer, " B", buf)) +
+        tm_layout(legend.outside = TRUE, frame = FALSE)
+    })
+
+    maps_list <- maps_list[!sapply(maps_list, is.null)]
+
+    if (length(maps_list) > 0) {
+      combined_map <- tmap_arrange(list = maps_list, ncol = 2)
+      file_name    <- sprintf("diff_Y%d_L%02d.png", curr_year, curr_layer)
+      file_path    <- file.path(save_dir, file_name)
+
+      png(file_path, width = 2400, height = 2000, res = 200, type = "cairo")
+      tryCatch(
+        print(combined_map),
+        finally = dev.off()
+      )
+    }
+
+    invisible(NULL)
+  },
+  .options = furrr_options_obj,
+  .progress = TRUE
+)
+
+plan(sequential)
+cat(">>> Done.\n")
+```
+
+```{r}
+job_grid <- expand.grid(
+  year  = sort(unique(landuse_extract_integrated$year)),
+  layer = sort(unique(landuse_extract_integrated$layer))
+)
+```
+
+```{r}
+#| echo: false
+#| results: 'asis'
+
+full_save_dir <- path.expand("~/huimori/daehoon/landuse_res")
+
+for (curr_year in sort(unique(job_grid$year))) {
+  cat(paste0("\n\n## Year: ", curr_year, "\n"))
+  
+  for (curr_layer in sort(unique(job_grid$layer))) {
+    file_name <- sprintf("diff_Y%d_L%02d.png", curr_year, curr_layer)
+    # 시스템상의 실제 파일 존재 여부 확인을 위해 full_save_dir 사용
+    file_path <- file.path(full_save_dir, file_name)
+    
+    if (file.exists(file_path)) {
+      cat(paste0("\n### Layer: ", curr_layer, "\n\n"))
+      cat(paste0('<img src="', file_path, '" style="width:100%; height:auto;">\n\n'))
+    }
+  }
+}
+```
