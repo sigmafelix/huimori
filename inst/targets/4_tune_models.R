@@ -194,7 +194,7 @@ list_tune_models <-
     targets::tar_target(
       name = workflow_fit_xgb_correct,
       command = {
-        yvar <- tune::outcome_names(workflow_tune_correct_spatial)
+        yvar <- tune::outcome_names(workflow_tune_xgb_correct_spatial)
 
         df_combined <-
           df_feat_grid_merged %>%
@@ -229,7 +229,7 @@ list_tune_models <-
           # )
         fitted <-
           tune::fit_best(
-            workflow_tune_correct_spatial,
+            workflow_tune_xgb_correct_spatial,
             metric = "rmse"
           ) %>%
           predict(
@@ -238,11 +238,11 @@ list_tune_models <-
           )
         fitted <-
           dplyr::bind_cols(fitted, df_combined[, c(4, 1, 2)]) %>%
-          dplyr::mutate(year = attr(workflow_tune_correct_spatial, "year"))
+          dplyr::mutate(year = attr(workflow_tune_xgb_correct_spatial, "year"))
         names(fitted)[1] <- yvar
         fitted
       },
-      pattern = cross(workflow_tune_correct_spatial, df_feat_grid_merged),
+      pattern = cross(workflow_tune_xgb_correct_spatial, df_feat_grid_merged),
       resources = targets::tar_resources(
         crew = targets::tar_resources_crew(controller = "controller_08")
       )
@@ -250,7 +250,7 @@ list_tune_models <-
     targets::tar_target(
       name = workflow_fit_incorrect,
       command = {
-        yvar <- tune::outcome_names(workflow_tune_incorrect_spatial)
+        yvar <- tune::outcome_names(workflow_tune_xgb_incorrect_spatial)
 
         df_combined <-
           df_feat_grid_merged %>%
@@ -264,7 +264,7 @@ list_tune_models <-
           )
         fitted <-
           tune::fit_best(
-            workflow_tune_incorrect_spatial,
+            workflow_tune_xgb_incorrect_spatial,
             metric = "rmse"
           ) %>%
           predict(
@@ -274,7 +274,7 @@ list_tune_models <-
         names(fitted) <- yvar
         fitted
       },
-      pattern = map(workflow_tune_incorrect_spatial),
+      pattern = map(workflow_tune_xgb_incorrect_spatial),
       resources = targets::tar_resources(
         crew = targets::tar_resources_crew(controller = "controller_08")
       )
