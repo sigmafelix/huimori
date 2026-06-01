@@ -91,6 +91,22 @@ list_basefiles <-
         mtpi <- terra::rast(chr_mtpi_file)
         mtpi_1km <- terra::aggregate(mtpi, fact = 11, fun = mean, na.rm = TRUE)
         out_file <- file.path(chr_dir_data, "elevation", "kngii_1km_mtpi.tif")
+        sidecar_files <- c(
+          out_file,
+          paste0(out_file, ".aux.xml"),
+          paste0(out_file, ".ovr"),
+          paste0(out_file, ".msk")
+        )
+        existing_sidecar_files <- sidecar_files[file.exists(sidecar_files)]
+        unlink(existing_sidecar_files, force = TRUE)
+        remaining_sidecar_files <- existing_sidecar_files[file.exists(existing_sidecar_files)]
+        if (length(remaining_sidecar_files) > 0 && file.exists(out_file)) {
+          warning(
+            "Could not remove existing raster output; reusing existing file: ",
+            out_file
+          )
+          return(out_file)
+        }
         terra::writeRaster(mtpi_1km, out_file, overwrite = TRUE)
         out_file
       },

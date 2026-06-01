@@ -176,6 +176,7 @@ list_process_feature_daily <-
     targets::tar_target(
       name = df_feat_correct_aod_daily,
       command = {
+        buffer_radii_m <- c(100, 500, 1000, 2000, 5000)
         mon_start <- as.Date(paste0(chr_months_spatial, "-01"))
         mon_end   <- lubridate::rollback(mon_start + months(1))
         date_seq  <- seq(mon_start, mon_end, by = "day")
@@ -195,11 +196,8 @@ list_process_feature_daily <-
           current_date <- as.Date(date_str, format = "%Y%j")
           
           # 해당 날짜에 실제 운영 중인 측정소만 필터링
-          current_sf <- sf_monitors_correct |> 
-            dplyr::filter(
-              as.Date(date_start) <= current_date & 
-                as.Date(date_end) >= current_date
-            )
+          current_sf <- sf_monitors_correct_month |> 
+            dplyr::filter(date == current_date)
           
           if (nrow(current_sf) == 0) return(NULL)
           
@@ -207,28 +205,36 @@ list_process_feature_daily <-
           aod_ras <- terra::rast(file)
           ras_crs <- terra::crs(aod_ras)
 
-          current_sf_buff <- current_sf |> 
-            sf::st_transform(ras_crs) |> 
-            sf::st_buffer(dist = 2000)
+          current_sf_proj <- current_sf |> 
+            sf::st_transform(ras_crs)
 
-          extracted <- exactextractr::exact_extract(
-            x = aod_ras,
-            y = current_sf_buff,
-            fun = "mean",
-            force_df = TRUE,
-            progress = FALSE
-          )
-
-          data.frame(
+          result <- data.frame(
             TMSID  = current_sf$TMSID,
             TMSID2 = current_sf$TMSID2,
-            date   = current_date,
-            aod    = ifelse(is.nan(extracted$mean), NA, extracted$mean)
+            date   = current_date
           )
+
+          for (buffer_m in buffer_radii_m) {
+            current_sf_buff <- current_sf_proj |> 
+              sf::st_buffer(dist = buffer_m)
+
+            extracted <- exactextractr::exact_extract(
+              x = aod_ras,
+              y = current_sf_buff,
+              fun = "mean",
+              force_df = TRUE,
+              progress = FALSE
+            )
+
+            result[[paste0("aod_", buffer_m, "m")]] <-
+              ifelse(is.nan(extracted$mean), NA, extracted$mean)
+          }
+
+          result
         })
       },
       # chr_months_spatial (108개)를 따라 branch 생성
-      pattern = map(chr_months_spatial),
+      pattern = map(chr_months_spatial, sf_monitors_correct_month),
       iteration = "list",
       resources = targets::tar_resources(
         crew = targets::tar_resources_crew(controller = "controller_15")
@@ -242,6 +248,7 @@ list_process_feature_daily <-
     targets::tar_target(
       name = df_feat_correct_era5_land_daily,
       command = {
+        buffer_radii_m <- c(100, 500, 1000, 2000, 5000)
 
         curr_yr  <- substr(chr_months_spatial, 1, 4)
         curr_mon <- substr(chr_months_spatial, 6, 7)
@@ -276,39 +283,54 @@ list_process_feature_daily <-
                                            na.rm = TRUE)
           }
 
-          current_sf <- sf_monitors_correct |> 
-            dplyr::filter(year == as.integer(curr_yr))
+          current_sf <- sf_monitors_correct_month |>
+            dplyr::arrange(date) |>
+            dplyr::group_by(TMSID, TMSID2) |>
+            dplyr::slice(1) |>
+            dplyr::ungroup()
           
-          s_buff <- current_sf |> 
-            sf::st_transform(terra::crs(r_full)) |> 
-            sf::st_buffer(dist = 2000)
+          current_sf_proj <- current_sf |> 
+            sf::st_transform(terra::crs(r_full))
 
-          res_list <- lapply(names(daily_list), function(v_name) {
-            ext <- exactextractr::exact_extract(daily_list[[v_name]], s_buff, 
-                                                fun = "mean", force_df = TRUE, progress = FALSE)
-            
-            # 데이터가 비어있는지 확인
-            if (nrow(ext) == 0) return(NULL)
-            
-            ext |>
-              dplyr::mutate(TMSID = current_sf$TMSID, TMSID2 = current_sf$TMSID2) |>
-              tidyr::pivot_longer(cols = dplyr::starts_with("mean"), 
-                                  names_to = "discard", 
-                                  values_to = v_name) |>
-              dplyr::group_by(TMSID, TMSID2) |>
-              dplyr::mutate(date = unique_dates[1:dplyr::n()]) |>
-              dplyr::ungroup() |>
-              dplyr::select(TMSID, TMSID2, date, dplyr::all_of(v_name))
+          res_list <- lapply(buffer_radii_m, function(buffer_m) {
+            s_buff <- current_sf_proj |> 
+              sf::st_buffer(dist = buffer_m)
+
+            var_list <- lapply(names(daily_list), function(v_name) {
+              ext <- exactextractr::exact_extract(daily_list[[v_name]], s_buff, 
+                                                  fun = "mean", force_df = TRUE, progress = FALSE)
+              
+              # 데이터가 비어있는지 확인
+              if (nrow(ext) == 0) return(NULL)
+              
+              ext |>
+                dplyr::mutate(TMSID = current_sf$TMSID, TMSID2 = current_sf$TMSID2) |>
+                tidyr::pivot_longer(cols = dplyr::starts_with("mean"), 
+                                    names_to = "discard", 
+                                    values_to = paste0(v_name, "_", buffer_m, "m")) |>
+                dplyr::group_by(TMSID, TMSID2) |>
+                dplyr::mutate(date = unique_dates[1:dplyr::n()]) |>
+                dplyr::ungroup() |>
+                dplyr::select(TMSID, TMSID2, date, dplyr::all_of(paste0(v_name, "_", buffer_m, "m")))
+            })
+
+            var_list <- Filter(Negate(is.null), var_list)
+            if (length(var_list) == 0) return(NULL)
+            Reduce(function(x, y) dplyr::left_join(x, y, by = c("TMSID", "TMSID2", "date")), var_list)
           })
           
           res_list <- Filter(Negate(is.null), res_list)
+          if (length(res_list) == 0) return(data.frame())
 
           final_mon <- Reduce(function(x, y) dplyr::left_join(x, y, by = c("TMSID", "TMSID2", "date")), res_list) |>
             dplyr::mutate(
-              across(any_of("t2m"), ~ .x - 273.15) # Kelvin to Celsius
+              dplyr::across(dplyr::starts_with("t2m_"), ~ .x - 273.15)
             ) |>
-            dplyr::filter(!is.na(date))
-          
+            dplyr::filter(
+              !is.na(date),
+              format(date, "%Y-%m") == chr_months_spatial
+            )
+
           return(final_mon)
           
         }, error = function(e) {
@@ -318,7 +340,7 @@ list_process_feature_daily <-
           unlink(temp_sub, recursive = TRUE)
         })
       },
-      pattern = map(chr_months_spatial),
+      pattern = map(chr_months_spatial, sf_monitors_correct_month),
       iteration = "list",
       resources = targets::tar_resources(
         crew = targets::tar_resources_crew(controller = "controller_15")
@@ -330,6 +352,7 @@ list_process_feature_daily <-
     targets::tar_target(
       name = df_feat_correct_era5_blh_daily,
       command = {
+        buffer_radii_m <- c(100, 500, 1000, 2000, 5000)
 
         curr_yr  <- substr(chr_months_spatial, 1, 4)
         curr_mon <- substr(chr_months_spatial, 6, 7)
@@ -353,26 +376,37 @@ list_process_feature_daily <-
                                  fun = "mean", 
                                  na.rm = TRUE)
 
-          current_sf <- sf_monitors_correct |> 
-            dplyr::filter(year == as.integer(curr_yr))
-          
-          s_buff <- current_sf |> 
-            sf::st_transform(terra::crs(r_full)) |> 
-            sf::st_buffer(dist = 2000)
-          
-
-          ext <- exactextractr::exact_extract(r_daily, s_buff, 
-                                              fun = "mean", force_df = TRUE, progress = FALSE)
-          
-          final_mon <- ext |>
-            dplyr::mutate(TMSID = current_sf$TMSID, TMSID2 = current_sf$TMSID2) |>
-            tidyr::pivot_longer(cols = starts_with("mean"), names_to = "discard", values_to = "blh") |>
+          current_sf <- sf_monitors_correct_month |>
+            dplyr::arrange(date) |>
             dplyr::group_by(TMSID, TMSID2) |>
-            dplyr::mutate(date = unique_dates[1:dplyr::n()]) |>
-            dplyr::ungroup() |>
-            dplyr::select(TMSID, TMSID2, date, blh) |>
-            dplyr::filter(!is.na(date))
+            dplyr::slice(1) |>
+            dplyr::ungroup()
           
+          current_sf_proj <- current_sf |> 
+            sf::st_transform(terra::crs(r_full))
+
+          res_list <- lapply(buffer_radii_m, function(buffer_m) {
+            s_buff <- current_sf_proj |> 
+              sf::st_buffer(dist = buffer_m)
+
+            ext <- exactextractr::exact_extract(r_daily, s_buff, 
+                                                fun = "mean", force_df = TRUE, progress = FALSE)
+            
+            ext |>
+              dplyr::mutate(TMSID = current_sf$TMSID, TMSID2 = current_sf$TMSID2) |>
+              tidyr::pivot_longer(cols = dplyr::starts_with("mean"), names_to = "discard", values_to = paste0("blh_", buffer_m, "m")) |>
+              dplyr::group_by(TMSID, TMSID2) |>
+              dplyr::mutate(date = unique_dates[1:dplyr::n()]) |>
+              dplyr::ungroup() |>
+              dplyr::select(TMSID, TMSID2, date, dplyr::all_of(paste0("blh_", buffer_m, "m")))
+          })
+
+          final_mon <- Reduce(function(x, y) dplyr::left_join(x, y, by = c("TMSID", "TMSID2", "date")), res_list) |>
+            dplyr::filter(
+              !is.na(date),
+              format(date, "%Y-%m") == chr_months_spatial
+            )
+
           return(final_mon)
           
         }, error = function(e) {
@@ -381,7 +415,7 @@ list_process_feature_daily <-
         })
       },
 
-      pattern = map(chr_months_spatial),
+      pattern = map(chr_months_spatial, sf_monitors_correct_month),
       iteration = "list",
       resources = targets::tar_resources(
         crew = targets::tar_resources_crew(controller = "controller_15")
@@ -413,10 +447,22 @@ list_process_feature_daily <-
           }
         }
 
-        yearly_feat_raw <- Filter(function(x) any(x$year == curr_yr), df_feat_correct_merged)
+        yearly_feat_raw <- if (is.data.frame(df_feat_correct_merged)) {
+          list(df_feat_correct_merged)
+        } else {
+          Filter(
+            function(x) {
+              is.data.frame(x) &&
+                "year" %in% names(x) &&
+                any(x$year == curr_yr)
+            },
+            df_feat_correct_merged
+          )
+        }
         
         if (length(yearly_feat_raw) > 0) {
-          static_feat <- yearly_feat_raw[[1]] %>%
+          static_feat <- dplyr::bind_rows(yearly_feat_raw) %>%
+            dplyr::filter(year == curr_yr) %>%
             dplyr::select(
               TMSID, TMSID2, year,
               d_road, dem, dsm, gw_emission, 
