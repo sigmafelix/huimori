@@ -875,6 +875,22 @@ list_process_feature <-
         if (!dir.exists(aod_yr_dir)) {
           dir.create(aod_yr_dir, recursive = TRUE)
         }
+        sidecar_files <- c(
+          aod_yr_file,
+          paste0(aod_yr_file, ".aux.xml"),
+          paste0(aod_yr_file, ".ovr"),
+          paste0(aod_yr_file, ".msk")
+        )
+        existing_sidecar_files <- sidecar_files[file.exists(sidecar_files)]
+        unlink(existing_sidecar_files, force = TRUE)
+        remaining_sidecar_files <- existing_sidecar_files[file.exists(existing_sidecar_files)]
+        if (length(remaining_sidecar_files) > 0 && file.exists(aod_yr_file)) {
+          warning(
+            "Could not remove existing raster output; reusing existing file: ",
+            aod_yr_file
+          )
+          return(aod_yr_file)
+        }
         terra::writeRaster(
           aod_yr,
           filename = aod_yr_file,
@@ -979,6 +995,22 @@ list_process_feature <-
 
         if (!dir.exists(blh_yr_dir)) {
           dir.create(blh_yr_dir, recursive = TRUE)
+        }
+        sidecar_files <- c(
+          blh_yr_file,
+          paste0(blh_yr_file, ".aux.xml"),
+          paste0(blh_yr_file, ".ovr"),
+          paste0(blh_yr_file, ".msk")
+        )
+        existing_sidecar_files <- sidecar_files[file.exists(sidecar_files)]
+        unlink(existing_sidecar_files, force = TRUE)
+        remaining_sidecar_files <- existing_sidecar_files[file.exists(existing_sidecar_files)]
+        if (length(remaining_sidecar_files) > 0 && file.exists(blh_yr_file)) {
+          warning(
+            "Could not remove existing raster output; reusing existing file: ",
+            blh_yr_file
+          )
+          return(blh_yr_file)
         }
         terra::writeRaster(
           blh_yr,
@@ -1535,4 +1567,3 @@ list_process_feature <-
 #### (2) 대기질 농도에서 음수값(-999로 기록됨)은 결측치 처리
 
 ### df_feat_correct_merged 수정: landuse 변경사항에 맞게 수정
-
