@@ -76,13 +76,17 @@ list_tune_models <-
           make_xgb_spatial_resamples(
             data = data_sub,
             v = 5L,
-            method = "snake"
+            method = "kmeans",
+            id_col = "TMSID",
+            crs = "EPSG:5179",
+            seed = 20260728L,
+            nstart = 100L
           )
-        cv_png <-
-          plot_xgb_spatial_folds(
+        cv_diagnostics <-
+          write_xgb_spatial_fold_diagnostics(
             data = data_sub,
             resamples = resamples_spatial,
-            output_dir = file.path("logs", "cv_blocks")
+            output_dir = file.path("daehoon", "logs", "cv_blocks")
           )
         res <-
           fit_tidy_xgb(
@@ -99,7 +103,8 @@ list_tune_models <-
           )
         attr(res, "target_year") <- attr(data_sub, "target_year")
         attr(res, "outcome") <- attr(data_sub, "outcome")
-        attr(res, "cv_png") <- cv_png
+        attr(res, "cv_png") <- cv_diagnostics$paths[["map_png"]]
+        attr(res, "cv_diagnostics") <- cv_diagnostics$paths
         res
       },
       pattern = cross(int_years_spatial, form_fit),
@@ -216,7 +221,7 @@ list_tune_models <-
       name = workflow_final_xgb_correct,
       command = {
         final_wf <-
-          tune::fit_best(
+          fit_best_tune_result(
             workflow_tune_xgb_correct_spatial,
             metric = "rmse"
           )
@@ -284,7 +289,7 @@ list_tune_eval <- list(
   targets::tar_target(
     name = df_tune_correct_metrics,
     command = {
-      df_metrics <- tune::collect_metrics(workflow_tune_xgb_correct_spatial)
+      df_metrics <- collect_tune_metrics_with_metadata(workflow_tune_xgb_correct_spatial)
       df_metrics
     },
     pattern = map(workflow_tune_xgb_correct_spatial),
@@ -297,21 +302,11 @@ list_tune_eval <- list(
   targets::tar_target(
     name = df_tune_correct_vip,
     command = {
-      train_variables <-
-        workflow_tune_xgb_correct_spatial |>
-        attr("workflow") |>
-        _[["pre"]] |>
-        _[["actions"]] |>
-        _[["recipe"]] |>
-        _[["recipe"]]
-
       train_data <-
-        train_variables[["template"]]
+        extract_tune_training_template(workflow_tune_xgb_correct_spatial)
 
       names_variables <-
-        train_variables |>
-        _[["var_info"]] |>
-        _[["variable"]]
+        extract_tune_training_variables(workflow_tune_xgb_correct_spatial)
       # remove the outcome variable
       names_target <- names_variables[length(names_variables)]
       names_variables <- names_variables[-length(names_variables)]
@@ -320,7 +315,7 @@ list_tune_eval <- list(
 
       df_train_fit <-
         workflow_tune_xgb_correct_spatial %>%
-        tune::fit_best() %>%
+        fit_best_tune_result() %>%
         tune::extract_fit_parsnip()
 
       pfun_shap <- function(object, newdata) {

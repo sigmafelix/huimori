@@ -955,7 +955,6 @@ pred_tmb <-
 #' @importFrom yardstick rmse rsq metric_set
 #' @importFrom workflows workflow add_recipe add_model
 #' @importFrom rsample vfold_cv group_vfold_cv
-#' @importFrom spatialsample spatial_block_cv
 #'
 #' @examples
 #' \dontrun{
@@ -1033,7 +1032,15 @@ fit_tidy_xgb <-
     } else if (is.null(strata)) {
       stratified <- rsample::vfold_cv(data = data, v = 5)
     } else if (identical(strata, "spatial")) {
-      stratified <- spatialsample::spatial_block_cv(data = data, method = "snake", v = 5)
+      stratified <- make_xgb_spatial_resamples(
+        data = data,
+        v = 5L,
+        method = "kmeans",
+        id_col = "TMSID",
+        crs = "EPSG:5179",
+        seed = 20260728L,
+        nstart = 100L
+      )
     } else if (is.character(strata)) {
       stratified <- rsample::group_vfold_cv(data = data, group = strata, v = NULL)
     }
@@ -1092,7 +1099,6 @@ fit_tidy_xgb <-
 #' @importFrom yardstick rmse rsq metric_set
 #' @importFrom workflows workflow add_recipe add_model
 #' @importFrom rsample vfold_cv group_vfold_cv
-#' @importFrom spatialsample spatial_block_cv
 #'
 #' @examples
 #' \dontrun{
@@ -1145,7 +1151,15 @@ fit_tidy_lgb <-
     if (is.null(strata)) {
       stratified <- rsample::vfold_cv(data = data, v = 5)
     } else if (identical(strata, "spatial")) {
-      stratified <- spatialsample::spatial_block_cv(data = data, method = "snake", v = 5)
+      stratified <- make_xgb_spatial_resamples(
+        data = data,
+        v = 5L,
+        method = "kmeans",
+        id_col = "TMSID",
+        crs = "EPSG:5179",
+        seed = 20260728L,
+        nstart = 100L
+      )
     } else if (is.character(strata)) {
       stratified <- rsample::group_vfold_cv(data = data, group = strata, v = NULL)
     }
@@ -1175,3 +1189,78 @@ fit_tidy_lgb <-
 
     return(lgb_res)
   }
+
+collect_tune_metrics_with_metadata <- function(x) {
+  df_metrics <- tune::collect_metrics(x)
+  fallback_error <- attr(x, "error", exact = TRUE)
+  target_year <- attr(x, "target_year", exact = TRUE)
+  outcome <- attr(x, "outcome", exact = TRUE)
+
+  if (is.null(target_year) || length(target_year) != 1L) {
+    target_year <- NA_integer_
+  }
+  if (is.null(outcome) || length(outcome) != 1L) {
+    outcome <- NA_character_
+  }
+
+  dplyr::mutate(
+    df_metrics,
+    target_year = as.integer(target_year),
+    outcome = as.character(outcome),
+    tuning_method = if (is.null(fallback_error)) {
+      "tune_race_anova"
+    } else {
+      "tune_grid_fallback"
+    },
+    tuning_fallback = !is.null(fallback_error),
+    tuning_fallback_error = if (is.null(fallback_error)) {
+      NA_character_
+    } else {
+      conditionMessage(fallback_error)
+    }
+  )
+}
+
+drop_sf_geometry_from_tune_result <- function(x) {
+  drop_geometry <- function(data) {
+    if (inherits(data, "sf")) {
+      sf::st_drop_geometry(data)
+    } else {
+      data
+    }
+  }
+
+  workflow <- attr(x, "workflow", exact = TRUE)
+  if (!is.null(workflow)) {
+    workflow$pre$actions$recipe$recipe$template <-
+      drop_geometry(workflow$pre$actions$recipe$recipe$template)
+    attr(x, "workflow") <- workflow
+  }
+
+  if ("splits" %in% names(x)) {
+    for (index in seq_along(x$splits)) {
+      x$splits[[index]]$data <- drop_geometry(x$splits[[index]]$data)
+    }
+  }
+
+  x
+}
+
+fit_best_tune_result <- function(x, metric = "rmse") {
+  tune::fit_best(
+    drop_sf_geometry_from_tune_result(x),
+    metric = metric
+  )
+}
+
+extract_tune_training_template <- function(x) {
+  x <- drop_sf_geometry_from_tune_result(x)
+  workflow <- attr(x, "workflow", exact = TRUE)
+  workflow$pre$actions$recipe$recipe$template
+}
+
+extract_tune_training_variables <- function(x) {
+  x <- drop_sf_geometry_from_tune_result(x)
+  workflow <- attr(x, "workflow", exact = TRUE)
+  workflow$pre$actions$recipe$recipe$var_info$variable
+}
