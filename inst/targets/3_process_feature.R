@@ -942,19 +942,32 @@ extract_yearly_buffer_mean <- function(
 
   extracted_by_radius <-
     lapply(buffer_radii_m, function(radius_i) {
-      buffers_raster_crs <-
-        get_feature_buffer(buffer_set, radius_i, id_cols, context = value_prefix) |>
-        sf::st_transform(terra::crs(raster_obj))
+      buffers <-
+        get_feature_buffer(buffer_set, radius_i, id_cols, context = value_prefix)
 
+      chunk_size <- as.integer(Sys.getenv("HUIMORI_EXACTEXTRACTR_CHUNK_SIZE", "20000"))
+      if (length(chunk_size) != 1L || is.na(chunk_size) || chunk_size < 1L) {
+        chunk_size <- 20000L
+      }
+      row_chunks <- split(
+        seq_len(nrow(buffers)),
+        ceiling(seq_len(nrow(buffers)) / chunk_size)
+      )
       extracted <-
-        exactextractr::exact_extract(
-          x = raster_obj,
-          y = buffers_raster_crs,
-          fun = "mean",
-          weights = NULL,
-          force_df = TRUE,
-          append_cols = id_cols_extract
-        )
+        lapply(row_chunks, function(idx) {
+          buffers_raster_crs <- sf::st_transform(buffers[idx, ], terra::crs(raster_obj))
+          out_i <- exactextractr::exact_extract(
+            x = raster_obj,
+            y = buffers_raster_crs,
+            fun = "mean",
+            weights = NULL,
+            force_df = TRUE,
+            append_cols = id_cols_extract
+          )
+          gc()
+          out_i
+        }) |>
+        dplyr::bind_rows()
       if (!identical(as.integer(extracted[[row_col]]), as.integer(meta[[row_col]]))) {
         stop(value_prefix, " extraction row order changed at radius ", radius_i, ".")
       }
@@ -1518,73 +1531,19 @@ list_process_feature <-
       iteration = "vector"
     ),
     targets::tar_target(
-      name = rast_year_aod,
+      name = rast_aod_yearly,
       command = {
-        year_i <- int_aod_year_chunks
-        chr_year_aod_files <- list.files(
-          pattern = paste0("MCD19A2_Daily_Composite_", year_i, "[0-9]{3,3}.tif$"),
-          path = chr_dir_aod,
-          full.names = TRUE,
-          recursive = TRUE
+        build_aod_yearly_from_daily_cubes(
+          cubes = rast_aod_daily,
+          year = int_aod_year_chunks
         )
-
-        r_list <- lapply(chr_year_aod_files, terra::rast)
-
-        template <- r_list[[1]]
-
-        aligned_list <- lapply(r_list, function(r) {
-          if (terra::ext(r) == terra::ext(template)) {
-            return(r)
-          } else {
-            # extend() adds NA padding if 'r' is smaller than the template
-            # crop() trims 'r' if it is larger than the template
-            r_extended <- terra::extend(r, template)
-            return(terra::crop(r_extended, template))
-          }
-        })
-
-        aod_ras <- terra::rast(aligned_list)
-
-        aod_yr <- terra::app(
-          aod_ras,
-          fun = function(x) median(x, na.rm = TRUE)
-        )
-
-        aod_yr_dir <- file.path(
-          chr_dir_data,
-          "aerosol"
-        )
-        aod_yr_file <-
-          file.path(aod_yr_dir, paste0("aod_yearly_", year_i, ".tif"))
-
-        if (!dir.exists(aod_yr_dir)) {
-          dir.create(aod_yr_dir, recursive = TRUE)
-        }
-        sidecar_files <- c(
-          aod_yr_file,
-          paste0(aod_yr_file, ".aux.xml"),
-          paste0(aod_yr_file, ".ovr"),
-          paste0(aod_yr_file, ".msk")
-        )
-        existing_sidecar_files <- sidecar_files[file.exists(sidecar_files)]
-        unlink(existing_sidecar_files, force = TRUE)
-        remaining_sidecar_files <- existing_sidecar_files[file.exists(existing_sidecar_files)]
-        if (length(remaining_sidecar_files) > 0 && file.exists(aod_yr_file)) {
-          warning(
-            "Could not remove existing raster output; reusing existing file: ",
-            aod_yr_file
-          )
-          return(aod_yr_file)
-        }
-        terra::writeRaster(
-          aod_yr,
-          filename = aod_yr_file,
-          overwrite = TRUE
-        )
-        aod_yr_file
       },
       pattern = map(int_aod_year_chunks),
-      iteration = "vector"
+      iteration = "vector",
+      format = "file",
+      resources = targets::tar_resources(
+        crew = targets::tar_resources_crew(controller = "controller_20")
+      )
     ),
     targets::tar_target(
       name = df_feat_correct_aod_yearly,
@@ -1593,13 +1552,13 @@ list_process_feature <-
           points_sf = sf_monitors_correct_yr,
           id_cols = c("TMSID", "TMSID2", "year"),
           feature_year = int_aod_year_chunks,
-          raster_file = rast_year_aod,
+          raster_file = rast_aod_yearly,
           value_prefix = "aod_yearly",
           buffer_radii_m = int_landuse_radius,
           buffer_set = sf_buffer_correct_yr
         )
       },
-      pattern = map(sf_monitors_correct_yr, sf_buffer_correct_yr, int_aod_year_chunks, rast_year_aod),
+      pattern = map(sf_monitors_correct_yr, sf_buffer_correct_yr, int_aod_year_chunks, rast_aod_yearly),
       iteration = "list"
     ),
     ### F09. CHELSA ####
@@ -1643,58 +1602,19 @@ list_process_feature <-
     ),
     ### F10. BLH (ERA5) ####
     targets::tar_target(
-      name = rast_era5_blh,
+      name = rast_blh_yearly,
       command = {
-        year_i <- int_aod_year_chunks
-        chr_year_blh_files <- list.files(
-          pattern = paste0("ERA5_BLH_", year_i, "_[0-9]{2,2}.nc$"),
-          path = chr_dir_era5_blh,
-          full.names = TRUE,
-          recursive = TRUE
+        build_blh_yearly_from_daily_cubes(
+          cubes = rast_blh_daily,
+          year = int_aod_year_chunks
         )
-
-        blh_ras <- terra::rast(chr_year_blh_files)
-
-        blh_yr <- terra::app(
-          blh_ras,
-          fun = "median"
-        )
-
-        blh_yr_dir <- file.path(
-          chr_dir_climate,
-          "ERA5_BLH_processed"
-        )
-        blh_yr_file <-
-          file.path(blh_yr_dir, paste0("era5_blh_yearly_", year_i, ".tif"))
-
-        if (!dir.exists(blh_yr_dir)) {
-          dir.create(blh_yr_dir, recursive = TRUE)
-        }
-        sidecar_files <- c(
-          blh_yr_file,
-          paste0(blh_yr_file, ".aux.xml"),
-          paste0(blh_yr_file, ".ovr"),
-          paste0(blh_yr_file, ".msk")
-        )
-        existing_sidecar_files <- sidecar_files[file.exists(sidecar_files)]
-        unlink(existing_sidecar_files, force = TRUE)
-        remaining_sidecar_files <- existing_sidecar_files[file.exists(existing_sidecar_files)]
-        if (length(remaining_sidecar_files) > 0 && file.exists(blh_yr_file)) {
-          warning(
-            "Could not remove existing raster output; reusing existing file: ",
-            blh_yr_file
-          )
-          return(blh_yr_file)
-        }
-        terra::writeRaster(
-          blh_yr,
-          filename = blh_yr_file,
-          overwrite = TRUE
-        )
-        blh_yr_file
       },
       pattern = map(int_aod_year_chunks),
-      iteration = "vector"
+      iteration = "vector",
+      format = "file",
+      resources = targets::tar_resources(
+        crew = targets::tar_resources_crew(controller = "controller_20")
+      )
     ),
     targets::tar_target(
       name = df_feat_correct_blh_yearly,
@@ -1703,13 +1623,13 @@ list_process_feature <-
           points_sf = sf_monitors_correct_yr,
           id_cols = c("TMSID", "TMSID2", "year"),
           feature_year = int_aod_year_chunks,
-          raster_file = rast_era5_blh,
+          raster_file = rast_blh_yearly,
           value_prefix = "blh_yearly",
           buffer_radii_m = int_landuse_radius,
           buffer_set = sf_buffer_correct_yr
         )
       },
-      pattern = map(sf_monitors_correct_yr, sf_buffer_correct_yr, int_aod_year_chunks, rast_era5_blh)
+      pattern = map(sf_monitors_correct_yr, sf_buffer_correct_yr, int_aod_year_chunks, rast_blh_yearly)
     ),
     ### F11. Merge features ####
     targets::tar_target(
@@ -2201,7 +2121,7 @@ list_process_feature <-
           points_sf = grid_use,
           id_cols = c("gid", "x", "y", "layer"),
           feature_year = int_aod_year_chunks,
-          raster_file = rast_year_aod,
+          raster_file = rast_aod_yearly,
           value_prefix = "aod_yearly",
           buffer_radii_m = int_landuse_radius,
           buffer_set = sf_buffer_grid
@@ -2214,7 +2134,7 @@ list_process_feature <-
       iteration = "list",
       pattern = cross(
         map(list_pred_calc_grid, sf_buffer_grid),
-        map(int_aod_year_chunks, rast_year_aod)
+        map(int_aod_year_chunks, rast_aod_yearly)
       ),
       resources = targets::tar_resources(
         crew = targets::tar_resources_crew(controller = "controller_20")
@@ -2230,7 +2150,7 @@ list_process_feature <-
           points_sf = grid_use,
           id_cols = c("gid", "x", "y", "layer"),
           feature_year = int_aod_year_chunks,
-          raster_file = rast_era5_blh,
+          raster_file = rast_blh_yearly,
           value_prefix = "blh_yearly",
           buffer_radii_m = int_landuse_radius,
           buffer_set = sf_buffer_grid
@@ -2243,7 +2163,7 @@ list_process_feature <-
       iteration = "list",
       pattern = cross(
         map(list_pred_calc_grid, sf_buffer_grid),
-        map(int_aod_year_chunks, rast_era5_blh)
+        map(int_aod_year_chunks, rast_blh_yearly)
       ),
       resources = targets::tar_resources(
         crew = targets::tar_resources_crew(controller = "controller_20")

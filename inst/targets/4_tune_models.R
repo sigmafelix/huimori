@@ -77,7 +77,7 @@ list_tune_models <-
             data = data_sub,
             v = 5L,
             method = "kmeans",
-            id_col = "TMSID",
+            id_col = "TMSID2",
             crs = "EPSG:5179",
             seed = 20260728L,
             nstart = 100L
@@ -86,7 +86,7 @@ list_tune_models <-
           write_xgb_spatial_fold_diagnostics(
             data = data_sub,
             resamples = resamples_spatial,
-            output_dir = file.path("daehoon", "logs", "cv_blocks")
+            output_dir = file.path("daehoon", "diagnostics", "annual_xgb_kmeans_lblo")
           )
         res <-
           fit_tidy_xgb(
@@ -99,7 +99,7 @@ list_tune_models <-
             race_alpha = 0.01,
             race_num_ties = 25L,
             device = "cpu",
-            nthread = 20L
+            nthread = 40L
           )
         attr(res, "target_year") <- attr(data_sub, "target_year")
         attr(res, "outcome") <- attr(data_sub, "outcome")

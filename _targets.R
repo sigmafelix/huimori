@@ -21,7 +21,15 @@ controller_10 <-
 controller_15 <-
   crew::crew_controller_local(name = "controller_15", workers = 15)
 controller_20 <-
-  crew::crew_controller_local(name = "controller_20", workers = 20)
+  crew::crew_controller_local(
+    name = "controller_20",
+    workers = as.integer(Sys.getenv("HUIMORI_CONTROLLER_20_WORKERS", "20"))
+  )
+controller_40 <-
+  crew::crew_controller_local(
+    name = "controller_40",
+    workers = as.integer(Sys.getenv("HUIMORI_CONTROLLER_40_WORKERS", "40"))
+  )
 
 
 
@@ -43,7 +51,8 @@ targets::tar_option_set(
     controller_04,
     controller_10,
     controller_15,
-    controller_20
+    controller_20,
+    controller_40
   ),
   error = "continue",
   garbage_collection = 3,
