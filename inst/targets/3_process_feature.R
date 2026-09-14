@@ -1707,12 +1707,6 @@ list_process_feature <-
         df_feat_correct_blh_yearly
       )
     ),
-    targets::tar_target(
-      name = df_feat_correct_merged_old,
-      command = {
-        df_feat_correct_merged
-      }
-    ),
     # Incorrect addresses
     targets::tar_target(
       name = df_feat_incorrect_d_road,
