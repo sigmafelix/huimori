@@ -1,0 +1,16 @@
+{
+  "version": 3,
+  "year": 2023,
+  "prediction_workers": 20,
+  "prediction_xgboost_threads": 2,
+  "raster_workers": 40,
+  "review_workers": 40,
+  "phase_separation": true,
+  "scientific_release": false,
+  "base_plan": "inst/config/daily_xgb_2023_resources_v2.json",
+  "base_sha256": "171b8a0b55974b55f5ffe38cfa4d549bab0696dbe37750b1dae979787e88808f",
+  "reuse_registry": "daehoon/data/daily_xgb_targets_audit/run=prediction20x2_001/reuse.rds",
+  "reuse_sha256": "04bf38dae81ee951e2f7e4f3cebece3eaf2a25ed933af9dea4efd972092bb2fc",
+  "equivalence_result": "daehoon/data/daily_xgb_targets_audit/run=prediction20x2_real_001/result.json",
+  "equivalence_sha256": "371d94a7194fd27632f116cdaa27fef8bbb45e4c827519fe7409728d838bdb61"
+}

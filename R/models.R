@@ -1036,7 +1036,7 @@ fit_tidy_xgb <-
         data = data,
         v = 5L,
         method = "kmeans",
-        id_col = "TMSID",
+        id_col = "TMSID2",
         crs = "EPSG:5179",
         seed = 20260728L,
         nstart = 100L
@@ -1155,7 +1155,7 @@ fit_tidy_lgb <-
         data = data,
         v = 5L,
         method = "kmeans",
-        id_col = "TMSID",
+        id_col = "TMSID2",
         crs = "EPSG:5179",
         seed = 20260728L,
         nstart = 100L

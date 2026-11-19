@@ -1,0 +1,24 @@
+{
+  "version": 2,
+  "year": 2023,
+  "fit_workers": 1,
+  "fit_xgboost_threads": 40,
+  "prediction_workers": 8,
+  "prediction_xgboost_threads": 5,
+  "raster_workers": 40,
+  "review_workers": 40,
+  "numerical_threads": 1,
+  "gdal_threads": 1,
+  "phase_separation": true,
+  "scientific_release": false,
+  "benchmarks": [
+    {
+      "path": "daehoon/data/daily_xgb_targets/year=2023/run=original_fixed300_001/assembly_benchmark/workers40_tasks40_001/result.json",
+      "sha256": "4c6315d438203f01099cfa545088c686330482f0472f3b69a5f8bc805f85abaa"
+    },
+    {
+      "path": "daehoon/data/daily_xgb_targets/year=2023/run=original_fixed300_001/review_benchmark/workers40_tasks40_001/result.json",
+      "sha256": "b653ba1dc4dc2dd4877036560bf15c68d56fa5a65ee14b5de3c99bd4af364280"
+    }
+  ]
+}

@@ -21,7 +21,23 @@ controller_10 <-
 controller_15 <-
   crew::crew_controller_local(name = "controller_15", workers = 15)
 controller_20 <-
-  crew::crew_controller_local(name = "controller_20", workers = 20)
+  crew::crew_controller_local(
+    name = "controller_20",
+    workers = as.integer(Sys.getenv("HUIMORI_CONTROLLER_20_WORKERS", "20"))
+  )
+controller_40 <-
+  crew::crew_controller_local(
+    name = "controller_40",
+    workers = as.integer(Sys.getenv("HUIMORI_CONTROLLER_40_WORKERS", "40"))
+  )
+
+# Daily original-baseline stages use separate bounded worker pools.
+source("R/daily_targets_controller.R")
+daily_fit_01 <- crew::crew_controller_local(name = "daily_fit_01", workers = 1)
+daily_predict_08 <- crew::crew_controller_local(name = "daily_predict_08", workers = 8, tasks_max = 12)
+daily_predict_20 <- daily_2023_controller20()
+daily_raster_40 <- daily_2023_controller_local(name = "daily_raster_40", workers = 40)
+daily_review_40 <- daily_2023_controller_local(name = "daily_review_40", workers = 40)
 
 
 
@@ -43,7 +59,13 @@ targets::tar_option_set(
     controller_04,
     controller_10,
     controller_15,
-    controller_20
+    controller_20,
+    controller_40,
+    daily_fit_01,
+    daily_predict_08,
+    daily_predict_20,
+    daily_raster_40,
+    daily_review_40
   ),
   error = "continue",
   garbage_collection = 3,
@@ -61,6 +83,7 @@ targets::tar_source("inst/targets/3_process_feature.R")
 targets::tar_source("inst/targets/3_1_process_feature_daily.R")  
 targets::tar_source("inst/targets/4_tune_models.R")
 targets::tar_source("inst/targets/6_export_prediction_maps.R")
+targets::tar_source("inst/targets/4_1_daily_xgb_targets.R")
 
 # Replace the target list below with your own:
 list(
@@ -75,5 +98,7 @@ list(
   list_fit_models,
   list_tune_models,
   list_tune_eval,
-  list_export_prediction_maps
+  list_export_prediction_maps,
+  list_fit_models_daily,
+  list_export_prediction_maps_daily
 )

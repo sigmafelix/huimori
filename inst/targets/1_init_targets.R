@@ -12,6 +12,20 @@ list_configs <-
       }
     ),
     targets::tar_target(
+      name = chr_dir_data2,
+      command = {
+        if (Sys.getenv("USER") %in% c("isong", "songlab", "dhnyu")) {
+          file.path("/mnt/hdd002", "dhnyu", "huimori", "kma")
+        } else {
+          file.path(Sys.getenv("HOME"), "Documents")
+        }
+      }
+    ),
+    targets::tar_target(
+      name = chr_dir_kma,
+      command = chr_dir_data2
+    ),
+    targets::tar_target(
       name = chr_dir_git,
       command = {
         if (Sys.getenv("USER") == "isong") {
